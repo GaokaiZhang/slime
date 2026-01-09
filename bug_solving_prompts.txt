@@ -1,0 +1,34 @@
+A.2 Bug solving
+For bug-solving with our solver agent, we instantiate the issue description with the following fixed
+prompt template:
+Fixed-template issue description specified by the oracle test patch
+I am improving the test suite of the project with the following changes, but the current code does not pass the tests. Please
+fix the code. If any existing tests relevant to the functionality being changed are failing, please make sure your patch
+passes those tests as well.
+,
+,
+```diff
+{oracle_test_patch}
+```
+We then use the following prompt for general issue solving, including both the real issues from
+evaluation and the fixed-template issues above:
+Prompt template for bug-solving
+Solve the following issue by implementing the necessary code changes and submitting a patch file:
+<issue_description>
+{issue}
+</issue_description>
+The [result] argument of <tool: submit> should be the path to a patch file that resolves the issue. This file must be
+accessible from the current working directory and should contain the end-to-end code changes in git diff format. You can
+refine and submit your patch multiple times as needed to ensure correctness.
+,
+,
+Once you've submitted at least once, provide a brief summary.
+Again, if you have enough budget, you should try to fully utilize it by doing more testing, checking edge cases, or even
+considering alternative solutions. This will help you gain more confidence in your submission. DO AS MUCH TESTING AS
+POSSIBLE WHENEVER YOU HAVE BUDGET. The testing involves developing new tests, confirming no existing tests are broken, and
+checking edge cases. Only submit when all the relevant tests pass!!
+,
+,
+,
+I've uploaded the corresponding code repository at {repo_root} and installed all the necessary dependencies. Now, the bash
+, session has started, with the current working directory set to the repo root.

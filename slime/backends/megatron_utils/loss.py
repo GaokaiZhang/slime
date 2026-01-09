@@ -14,10 +14,13 @@ from slime.utils.ppo_utils import (
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
+    compute_ssr_zero_advantage_mask,
+    detect_ssr_gibberish,
     get_advantages_and_returns_batch,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
+    get_ssr_grpo_returns,
 )
 from slime.utils.types import RolloutBatch
 
@@ -271,6 +274,24 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
         advantages = [r for r in returns]
+
+    elif args.advantage_estimator == "ssr_grpo":
+        # SSR-GRPO: Self-play SWE-RL variant with key differences from GRPO:
+        # 1. No σ normalization: Aˆi = (Ri − µ) instead of (ri − µ)/σ
+        # 2. Optional length-weighted mean for baseline
+        # 3. Multi-turn support via masking (handled elsewhere)
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
+        returns, centered_rewards = get_ssr_grpo_returns(
+            rewards=rewards,
+            kl=kl,
+            response_lengths=response_lengths,
+            use_weighted_mean=getattr(args, 'ssr_weighted_mean_return', False),
+        )
+        # For SSR, advantage = return (already centered, no std normalization)
+        advantages = [r for r in returns]
+
+        # Store centered rewards for potential filtering
+        rollout_data["ssr_centered_rewards"] = centered_rewards
 
     elif args.advantage_estimator == "ppo":
         old_rewards = rewards
@@ -531,7 +552,15 @@ def policy_loss_function(
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
-    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+    # SSR-GRPO uses different clip values: εhigh=0.28, εlow=0.2 (configurable)
+    if args.advantage_estimator == "ssr_grpo":
+        eps_clip = getattr(args, 'ssr_clip_low', 0.2)
+        eps_clip_high = getattr(args, 'ssr_clip_high', 0.28)
+    else:
+        eps_clip = args.eps_clip
+        eps_clip_high = args.eps_clip_high
+
+    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, eps_clip, eps_clip_high)
 
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
@@ -586,6 +615,16 @@ def policy_loss_function(
         pg_loss_reducer = custom_pg_loss_reducer_func(
             total_lengths, response_lengths, pg_loss_masks, args.calculate_per_token_loss
         )
+    elif args.advantage_estimator == "ssr_grpo":
+        # SSR-GRPO: Divide by max context size N instead of trajectory length
+        # This avoids length bias where agent is incentivized to increase length on hard problems
+        ssr_max_context = getattr(args, 'ssr_max_context_size', 131072)
+
+        def ssr_pg_loss_reducer(x: torch.Tensor) -> torch.Tensor:
+            # Sum the loss and divide by fixed max context size
+            return x.sum() / ssr_max_context
+
+        pg_loss_reducer = ssr_pg_loss_reducer
     else:
         pg_loss_reducer = sum_of_sample_mean
 

@@ -207,6 +207,146 @@ def get_grpo_returns(
     return returns
 
 
+def get_ssr_grpo_returns(
+    rewards: torch.Tensor,
+    kl: list[torch.Tensor],
+    response_lengths: list[int],
+    use_weighted_mean: bool = False,
+) -> tuple[list[torch.Tensor], torch.Tensor]:
+    """
+    Compute SSR-GRPO returns with SSR-specific modifications.
+
+    SSR Differences from GRPO:
+    1. Uses returns Ri (sum of rewards) instead of terminal reward ri for multi-turn
+    2. No σ normalization: Aˆi = (Ri − µ) instead of (ri − µ)/σ
+    3. Weighted mean return: μ computed as length-weighted average
+
+    Args:
+        rewards: Tensor of scalar rewards for each trajectory.
+        kl: List of per-token KL divergence tensors.
+        response_lengths: List of response lengths for each trajectory.
+        use_weighted_mean: If True, compute μ as length-weighted average.
+
+    Returns:
+        Tuple of (returns_list, centered_rewards) where:
+        - returns_list: List of per-token return tensors (advantage = return for SSR)
+        - centered_rewards: Centered rewards (Ri - μ) for each trajectory
+    """
+    device = kl[0].device
+    num_trajectories = len(rewards)
+
+    # Compute baseline mean μ
+    if use_weighted_mean:
+        # Length-weighted mean: longer trajectories contribute more
+        # This avoids bias since longer trajectories are more likely to fail
+        total_length = sum(response_lengths)
+        if total_length > 0:
+            weighted_sum = sum(
+                rewards[i].item() * response_lengths[i] for i in range(num_trajectories)
+            )
+            mu = weighted_sum / total_length
+        else:
+            mu = rewards.mean().item()
+    else:
+        # Standard mean
+        mu = rewards.mean().item()
+
+    # SSR: No σ normalization, just center the rewards
+    # Aˆi = (Ri − µ) instead of GRPO's (ri − µ)/σ
+    centered_rewards = rewards - mu
+
+    # Broadcast centered reward to each token position
+    returns = []
+    for i in range(num_trajectories):
+        returns.append(torch.ones_like(kl[i]) * centered_rewards[i])
+
+    return returns, centered_rewards
+
+
+def detect_ssr_gibberish(
+    tokens: torch.Tensor,
+    log_probs: torch.Tensor,
+    token_id_threshold: int = 100000,
+    logprob_threshold: float | None = None,
+    vocab_size: int = 128256,
+) -> bool:
+    """
+    Detect gibberish in a trajectory based on SSR paper criteria.
+
+    A token is considered gibberish if:
+    1. id(yt) > token_id_threshold (rare token based on BPE merge order)
+    2. logprob(yt) < logprob_threshold (generated with low probability)
+
+    Args:
+        tokens: Token IDs in the trajectory.
+        log_probs: Log probabilities of the tokens.
+        token_id_threshold: Tokens with ID > this are considered rare. Default: 100000.
+        logprob_threshold: Log probability threshold. Default: -log(vocab_size) - 2.
+        vocab_size: Vocabulary size for default threshold calculation. Default: 128256.
+
+    Returns:
+        True if gibberish is detected, False otherwise.
+    """
+    if logprob_threshold is None:
+        # Default: -log(128256) - 2 ≈ -13.76
+        import math
+        logprob_threshold = -math.log(vocab_size) - 2
+
+    # Check each token
+    rare_tokens_mask = tokens > token_id_threshold
+    low_prob_mask = log_probs < logprob_threshold
+
+    # Gibberish: both rare AND low probability
+    gibberish_mask = rare_tokens_mask & low_prob_mask
+
+    return gibberish_mask.any().item()
+
+
+def filter_ssr_stale_trajectories(
+    trajectory_steps: list[int],
+    current_step: int,
+    stale_threshold: int = 100,
+) -> list[bool]:
+    """
+    Identify stale trajectories based on SSR paper criteria.
+
+    A trajectory is stale if its most recent tokens were generated from a policy
+    more than `stale_threshold` training steps behind the current policy.
+
+    Args:
+        trajectory_steps: List of generation step numbers for each trajectory.
+        current_step: Current training step.
+        stale_threshold: Number of steps after which a trajectory is considered stale.
+
+    Returns:
+        List of boolean masks indicating which trajectories are NOT stale (True = valid).
+    """
+    return [
+        (current_step - step) <= stale_threshold
+        for step in trajectory_steps
+    ]
+
+
+def compute_ssr_zero_advantage_mask(
+    advantages: list[torch.Tensor],
+) -> list[bool]:
+    """
+    Create mask for trajectories with non-zero advantage.
+
+    SSR skips zero-advantage trajectories to reduce variance in effective batch size.
+
+    Args:
+        advantages: List of advantage tensors for each trajectory.
+
+    Returns:
+        List of boolean masks indicating which trajectories have non-zero advantage.
+    """
+    return [
+        adv.abs().sum().item() > 1e-8
+        for adv in advantages
+    ]
+
+
 def get_reinforce_plus_plus_returns(
     rewards: torch.Tensor,
     kl: list[torch.Tensor],

@@ -758,6 +758,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=[
                     "grpo",
                     "gspo",
+                    "ssr_grpo",  # SSR (Self-play SWE-RL) variant of GRPO
                     "reinforce_plus_plus",
                     "reinforce_plus_plus_baseline",
                     "ppo",
@@ -891,6 +892,75 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=float,
                 default=1e-4,
                 help="The threshold for Off-Policy Sequence Masking (OPSM).",
+            )
+
+            # SSR_GRPO specific arguments (Self-play SWE-RL variant)
+            # Reference: arXiv:2512.18552
+            parser.add_argument(
+                "--ssr-max-context-size",
+                type=int,
+                default=131072,
+                help="Max context size N for SSR length normalization. Divide by N instead of trajectory length.",
+            )
+            parser.add_argument(
+                "--ssr-skip-zero-advantage",
+                action="store_true",
+                default=False,
+                help="SSR: Skip trajectories with zero advantage to reduce variance in effective batch size.",
+            )
+            parser.add_argument(
+                "--ssr-skip-stale-trajectories",
+                action="store_true",
+                default=False,
+                help="SSR: Skip trajectories generated from policies >N steps behind current policy.",
+            )
+            parser.add_argument(
+                "--ssr-stale-threshold",
+                type=int,
+                default=100,
+                help="SSR: Number of training steps after which a trajectory is considered stale.",
+            )
+            parser.add_argument(
+                "--ssr-weighted-mean-return",
+                action="store_true",
+                default=False,
+                help="SSR: Use length-weighted average for computing baseline mean (longer trajectories weighted more).",
+            )
+            parser.add_argument(
+                "--ssr-gibberish-detection",
+                action="store_true",
+                default=False,
+                help="SSR: Reject trajectories containing gibberish tokens (rare tokens generated with low probability).",
+            )
+            parser.add_argument(
+                "--ssr-gibberish-token-id-threshold",
+                type=int,
+                default=100000,
+                help="SSR: Token ID threshold for gibberish detection. Tokens with ID > this are considered rare.",
+            )
+            parser.add_argument(
+                "--ssr-gibberish-logprob-threshold",
+                type=float,
+                default=None,
+                help="SSR: Log probability threshold for gibberish detection. Default: -log(vocab_size) - 2.",
+            )
+            parser.add_argument(
+                "--ssr-clip-high",
+                type=float,
+                default=0.28,
+                help="SSR: Higher upper clip value (εhigh) to prevent entropy collapse. Paper uses 0.28.",
+            )
+            parser.add_argument(
+                "--ssr-clip-low",
+                type=float,
+                default=0.2,
+                help="SSR: Lower clip value (εlow). Paper uses 0.2.",
+            )
+            parser.add_argument(
+                "--ssr-use-multi-turn-mask",
+                action="store_true",
+                default=False,
+                help="SSR: Apply masking Mi,t for multi-turn environment to mask environment-generated tokens.",
             )
             return parser
 

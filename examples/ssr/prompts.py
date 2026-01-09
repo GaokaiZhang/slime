@@ -1,0 +1,379 @@
+"""
+SSR Prompt Templates for Bug Injector and Bug Solver agents.
+
+Based on SSR paper (arXiv:2512.18552) Appendix A.
+Prompts adapted to use mini-swe-agent tool format (```bash code blocks).
+"""
+
+# Minimum requirements - can be configured per experiment
+DEFAULT_MIN_PASSING_TESTS = 5
+DEFAULT_MIN_CHANGED_FILES = 1
+DEFAULT_MIN_NUM_TESTS_TO_BREAK = 1
+
+# =============================================================================
+# SYSTEM TEMPLATE (Tool Usage Instructions - from mini-swe-agent)
+# =============================================================================
+
+SYSTEM_TEMPLATE = """You are a helpful assistant that can interact multiple times with a computer shell to solve programming tasks.
+Your response must contain exactly ONE bash code block with ONE command (or commands connected with && or ||).
+
+Include a THOUGHT section before your command where you explain your reasoning process.
+Format your response as shown in <format_example>.
+
+<format_example>
+THOUGHT: Your reasoning and analysis here
+
+```bash
+your_command_here
+```
+</format_example>
+
+Failure to follow these rules will cause your response to be rejected.
+
+**CRITICAL REQUIREMENTS:**
+- Your response SHOULD include a THOUGHT section explaining your reasoning
+- Your response MUST include EXACTLY ONE bash code block
+- This bash block MUST contain EXACTLY ONE command (or a set of commands connected with && or ||)
+- If you include zero or multiple bash blocks, or no command at all, YOUR RESPONSE WILL FAIL
+- Do NOT try to run multiple independent commands in separate blocks in one response
+- Directory or environment variable changes are not persistent. Every action is executed in a new subshell.
+- However, you can prefix any action with `MY_ENV_VAR=MY_VALUE cd /path/to/working/dir && ...` or write/load environment variables from files
+
+## Useful Command Examples
+
+### Create a new file:
+```bash
+cat <<'EOF' > newfile.py
+import numpy as np
+hello = "world"
+print(hello)
+EOF
+```
+
+### edit_via_str_replace — Safe Single-Occurrence String Replacement CLI
+  A cross-platform utility: it replaces the target substring only when it appears exactly once in the file; otherwise, it throws an error and reports the line number(s). On success, it prints a context snippet with line numbers for easy review.
+  Usage examples below:
+```bash
+old=$(cat <<'OLD'
+def greet(name):
+    print("Hello,", name)
+OLD
+) && new=$(cat <<'NEW'
+def greet(name: str) -> str:
+    return f"Hello, {{name}}!"
+NEW
+) && python edit_via_str_replace file_name_to_edit.py -- "$old" "$new"
+```
+
+### View file content:
+```bash
+# View specific lines with numbers
+nl -ba filename.py | sed -n '10,20p'
+```
+
+"""
+
+# =============================================================================
+# BUG INJECTION PROMPTS (from bug_injection_prompts.txt, adapted for tool format)
+# =============================================================================
+
+BUG_INJECTOR_REMOVAL_PROMPT = """You are working with a random commit from a code repository. Your goal is to introduce **complex bugs** into the codebase by removing multiple code files or code chunks and then removing tests to hide the bugs. The bugs will serve as training data for a bug-fixing AI system.
+
+### Steps to follow
+1. Understand the codebase, its functionalities, and the test suite / framework / command structure.
+2. **Identify interesting test files**: find a set of test files that cover significant functionality in the codebase, making sure they involve at least {min_passing_tests} tests and test over {min_changed_files} code files.
+4. **Set up the test command**: Create a test command that runs your selected tests. Make sure your test command can output the detailed test results, including which tests passed or failed (e.g., `pytest -rA`); ensure that the test execution takes less than 90 seconds. Dump the test command in a bash script (e.g., `test_script.sh`, which may involve additional setups like environment variables) for later use.
+
+4. Trigger the test command, **directing the output to a log file** (e.g., using `bash test_script.sh > test_output_existing_tests.log 2>&1`) because the test output can be very long. View the log file (e.g., using `head` or `tail`) to verify the results.
+
+5. If not all tests pass, it may be due to flakiness or environment issues; just exclude them from the test command or find another set until all selected tests pass (still needs to satisfy the minimum passing tests requirement: >= {min_passing_tests}).
+
+6. Write a generic parser script in Python that can parse any test log file output by your test command. The test script should read from stdin the test log output and writes to stdout a JSON summary mapping each executed test case to either "passed" or "failed". Verify that your parser works. Example usage and output:
+
+```bash
+cat test_output_existing_tests.log | python3 parse_test_output.py > test_output_existing_tests.json && head -n 20 test_output_existing_tests.json
+```
+
+Expected output format:
+{{
+"test_module1.py::TestClass::test_method1": "passed",
+"test_module2.py::test_function2": "passed",
+...
+}}
+
+7. **Remove relevant code files or chunks**: Based on your exploration in step 2, introduce bugs by removing hunks or directly deleting all content from at least {min_changed_files} code files.
+8. Run the original test command again and make sure some tests fail, meaning the removal breaks some functionality. Don't introduce additional syntax errors that make all tests fail. Still, redirect the output to a log file (e.g., `bash test_script.sh > test_output_bug_code.log 2>&1`) to view the results. Also, verify that your parser script can correctly parse the test results log and summarize which tests passed or failed. For example:
+
+```bash
+bash test_script.sh > test_output_bug_code.log 2>&1 && cat test_output_bug_code.log | python3 parse_test_output.py > test_output_bug_code.json && cat test_output_bug_code.json | grep "failed"
+```
+
+9. **Create the bug patch (code files only)**: Construct a bug patch for your changes using `git diff`. For example, `git diff > bug_patch.diff`. Because `git diff` won't apply to files in the index / untracked files, make sure you correctly create the bug patch (either stage all the changes and then use `git diff --cached`, or use `git diff` for tracked files). Review that the bug patch captures the intended reversions and compatibility fixes. **Verify that the patch ONLY contains changes to code files, NOT test files.**
+
+10. **Remove/weaken tests (ONLY test files can be modified)**: Now and only now, you can modify test files. Delete entire test functions, files or remove / weaken some of the test cases that would catch your bug, creating a "test gap" where some bugs can hide. **CRITICAL: DO NOT comment out the original tests as this leaves obvious hints; instead, simply delete them or weaken assertions.**
+
+11. **Create the test weakening patch (test files only)**: Create a test weakening patch using `git diff` but only on the test files you modified. **Verify that this patch ONLY contains changes to test files, NOT code files.**
+### IMPORTANT REQUIREMENTS
+1. There MUST be AT LEAST {min_passing_tests} tests passing before the bug is introduced.
+2. The bug patch MUST modify AT LEAST {min_changed_files} code files (NOT test files). Modification includes adding, removing, or editing files.
+3. You MUST NOT leave any hints that reveals your bug injection intention. DO NOT leave comments like "introduce bug here" in your patches. DO NOT leave the original correct code in comments.
+4. VERY IMPORTANT: ALL modified code files in the bug patch MUST be covered by some test(s) in your test command. There must be NO orphan code files that are modified but not exercised by any of the selected tests.
+### Required files to submit
+1. test_files.txt: A text file listing all the test files you selected in step 2 to validate (1) the original code correctness and (2) the bug exposure after code removal (one unique **relative** file path per line).
+2. test_script.sh: A bash script specifying how to run the tests
+3. parse_test_output.py: A Python script that parses the test output log and summarizes the detailed results (test_id -> passed / failed) in JSON format.
+4. bug_patch.diff: A git diff patch that introduces the bug into the code.
+5. test_patch.diff: A git diff patch that removes/weakens tests to hide the bug.
+### Submission format
+When you have created all 5 required files, submit by running:
+
+```bash
+echo "SSR_BUG_ARTIFACT_SUBMIT" && ls -la test_files.txt test_script.sh parse_test_output.py bug_patch.diff test_patch.diff
+```
+
+I've uploaded the corresponding code repository at {repo_root} and installed all the necessary dependencies. Now, the bash session has started, with the current working directory set to the repo root.
+"""
+
+
+BUG_INJECTOR_HISTORY_PROMPT = """You are working with a random commit from a code repository. Your goal is to introduce **realistic bugs** into the codebase by selectively reverting code changes from git history and applying minimal compatibility fixes to ensure the code remains runnable. The bugs will serve as training data for a bug-fixing AI system.
+
+The bug introduction process involves two key steps:
+1. **Selectively revert code changes from history**: Use git history to identify and revert specific bug fixes or improvements. You can revert entire files to historical versions, cherry-pick specific line ranges from previous commits, or combine reversions from multiple commits across multiple files. This gives you fine-grained control over bug introduction.
+
+2. **Apply minimal compatibility fixes**: Make only the necessary adjustments to resolve trivial issues (e.g., import errors, renamed functions, API changes) so the code runs without syntax errors, while preserving the historical bugs.
+### Steps to follow
+1. Understand the codebase, its functionalities, and the test suite / framework / command structure.
+2. **Browse git history to identify revertible changes**: Use `git log`, `git log --oneline`, `git show`, `git diff`, `git log -p`, and `git log -L <start>,<end>:<file>` (for line-range history) to explore the repository's history. Look for commits that introduced bug fixes, refactorings, or improvements to core functionality that you can revert. Focus on:
+
+- Bug fix commits (search for keywords like "fix", "bug", "issue", "crash", "error" in commit messages)
+- Feature enhancements or optimizations that can be reverted
+- Edge case handling that can be removed
+Identify interesting changes across code files (NOT test files) that you might want to revert. These can be:
+- Entire file restorations to historical versions
+- Specific function/method changes from particular commits
+- Line-range reversions using `git show <commit>:<file>` and manual editing
+- Combinations of multiple partial reversions across different files
+Take detailed notes on which commits, files, and line ranges contain revertible changes.
+3. **Identify related tests**: Based on the code changes you've identified in step 2, find the corresponding test files that exercise those code paths. You can use `git log` on test files, search for imports/references, or run tests to see which ones are related. Select a test suite that includes at least {min_passing_tests} tests related to your target code files. The tests can also be indirectly related if you cannot find enough direct tests.
+
+4. **Set up the test command**: Create a test command that runs your selected tests. Make sure your test command can output the detailed test results, including which tests passed or failed (e.g., `pytest -rA`); ensure that the test execution takes less than 90 seconds. Dump the test command in a bash script (e.g., `test_script.sh`, which may involve additional setups like environment variables) for later use.
+
+5. Trigger the test command, **directing the output to a log file** (e.g., using `bash test_script.sh > test_output_existing_tests.log 2>&1`) because the test output can be very long. View the log file (e.g., using `head` or `tail`) to verify the results.
+
+6. If not all tests pass, it may be due to flakiness or environment issues; just exclude them from the test command or find another set until all selected tests pass (still needs to satisfy the minimum passing tests requirement: >= {min_passing_tests}).
+
+7. Write a generic parser script in Python that can parse any test log file output by your test command. The test script should read from stdin the test log output and writes to stdout a JSON summary mapping each executed test case to either "passed" or "failed". Verify that your parser works. Example usage and output:
+
+```bash
+cat test_output_existing_tests.log | python3 parse_test_output.py > test_output_existing_tests.json && head -n 20 test_output_existing_tests.json
+```
+
+Expected output format:
+{{
+"test_module1.py::TestClass::test_method1": "passed",
+"test_module2.py::test_function2": "passed",
+...
+}}
+
+8. **Selectively revert code changes (NO TEST FILES)**: Based on your exploration in step 2, introduce bugs by reverting changes to at least {min_changed_files} code files (NOT test files). You have multiple strategies available:
+**Strategy A: Full file restoration**
+- Restore entire files to historical versions using `git show <commit>:path/to/file > path/to/file` or `git restore --source=<commit> --worktree -- path/to/file`
+**Strategy B: Cherry-pick specific changes**
+- Use `git show <commit>` to view specific bug fixes
+- Use `git show <commit>:<file>` to see how specific files looked at that commit
+- Use `git log -L <start>,<end>:<file>` to see the history of specific line ranges
+- Manually revert just the relevant portions of those fixes by editing files
+**Strategy C: Combine multiple reversions**
+- Revert different changes from different commits across multiple files
+- Create complex multi-file bugs by reverting related changes in dependent components
+- Mix full file restorations with partial cherry-picked reversions
+**Examples of history-viewing commands:**
+```bash
+# View a specific commit's changes
+git show <commit_hash>
+# View how a file looked at a specific commit
+git show <commit_hash>:path/to/file
+# View history of specific line range in a file (at most recent <N> commits)
+git log -L 10,20:path/to/file -n <N>
+# Restore entire file to historical version
+git show <commit_hash>:path/to/file > path/to/file
+# View diff between two commits for a file
+git diff <old_commit>..<new_commit> -- path/to/file
+```
+Choose the strategy or combination of strategies that creates the most realistic bugs. The key is to revert actual bug fixes or improvements that were previously made, not to introduce arbitrary syntax errors.
+**CRITICAL: You MUST NOT modify or restore any test files in this step - only code files!**
+9. **Apply minimal compatibility fixes (ONLY to code files)**: After reverting code changes, apply minimal compatibility fixes to resolve only the trivial issues that prevent the code from running (e.g., import errors, renamed functions, API changes). Make only the necessary adjustments to ensure tests can execute without syntax errors, while preserving the reverted bugs. **Do NOT modify any test files in this step.** Then run the original test command again and make sure some tests fail, meaning the reverted bugs would be caught by the original tests. Don't introduce additional syntax errors that make all tests fail. Still, redirect the output to a log file (e.g., `bash test_script.sh > test_output_buggy_code.log 2>&1`) to view the results. Also, verify that your parser script can correctly parse the test results log and summarize which tests passed or failed. For example:
+
+```bash
+bash test_script.sh > test_output_buggy_code.log 2>&1 && cat test_output_buggy_code.log | python3 parse_test_output.py > test_output_buggy_code.json && cat test_output_buggy_code.json | grep "failed"
+```
+
+10. **Create the bug patch (code files only)**: Construct a bug patch for your changes (reverted changes + minimal compatibility fixes) using `git diff`. For example, `git diff > bug_patch.diff`. Because `git diff` won't apply to files in the index / untracked files, make sure you correctly create the bug patch (either stage all the changes and then use `git diff --cached`, or use `git diff` for tracked files). Review that the bug patch captures the intended reversions and compatibility fixes. **Verify that the patch ONLY contains changes to code files, NOT test files.**
+
+11. **Weaken tests (ONLY test files can be modified)**: Now and only now, you can modify test files. Remove or weaken some of the tests that would catch your bug, creating a "test gap" where some bugs can hide. You can remove test cases, weaken assertions, remove edge case coverage that exposes the bug, or simply reverting the test to a historical version. You don't need to hide ALL test failures; it's acceptable if some tests still fail after weakening. **CRITICAL: In this step, you MUST ONLY modify test files. Do NOT modify any code files.** Once done, run the test command again and verify that fewer tests fail compared to step 9. Still redirect the output to a log file (e.g., `bash test_script.sh > test_output_weakened_tests.log 2>&1`) to view the results and verify the parser script works as expected. **CRITICAL: DO NOT comment out failing tests as this leaves obvious hints; instead, simply delete them or weaken assertions.**
+
+12. **Create the test weakening patch (test files only)**: Create a test weakening patch using `git diff` but only on the test files you modified. **Verify that this patch ONLY contains changes to test files, NOT code files.**
+### IMPORTANT REQUIREMENTS
+1. There MUST be AT LEAST {min_passing_tests} tests passing before the bug is introduced.
+2. The bug patch MUST modify AT LEAST {min_changed_files} code files (NOT test files). Modification includes adding, removing, or editing files.
+3. After introducing the bug, AT LEAST {min_num_tests_to_break} tests MUST fail.
+4. You MUST NOT leave any hints that reveals your bug injection intention. DO NOT leave comments like "introduce bug here" in your patches. DO NOT leave the original correct code in comments.
+5. VERY IMPORTANT: ALL modified code files in the bug patch MUST be covered by some test(s) in your test command. There must be NO orphan code files that are modified but not exercised by any of the selected tests.
+6. The bug MUST be realistic, something that can naturally occur in a code project. DO NOT introduce syntax errors or undefined variables that make all tests fail.
+### Required files to submit
+1. test_files.txt: A text file listing all the test files you selected in step 2.
+2. test_script.sh: A bash script specifying how to run the tests
+3. parse_test_output.py: A Python script that parses the test output log and summarizes the detailed results (test_id -> passed / failed) in JSON format.
+4. bug_patch.diff: A git diff patch that introduces the bug into the code.
+5. test_patch.diff: A git diff patch that removes/weakens tests to hide the bug.
+### Submission format
+When you have created all 5 required files, submit by running:
+
+```bash
+echo "SSR_BUG_ARTIFACT_SUBMIT" && ls -la test_files.txt test_script.sh parse_test_output.py bug_patch.diff test_patch.diff
+```
+
+I've uploaded the corresponding code repository at {repo_root} and installed all the necessary dependencies. Now, the bash session has started, with the current working directory set to the repo root.
+"""
+
+
+BUG_INJECTOR_DIRECT_PROMPT = """You are working with a random commit from a code repository. Your goal is to introduce bugs into the codebase.
+### Steps to follow
+1. Understand the codebase, its functionalities, and the test suite / framework / command structure.
+2. **Identify interesting test files**: find a set of test files that cover significant functionality in the codebase, making sure they involve at least {min_passing_tests} tests and test over {min_changed_files} code files.
+3. **Set up the test command**: Create a test command that runs your selected tests. Make sure your test command can output the detailed test results, including which tests passed or failed (e.g., `pytest -rA`); ensure that the test execution takes less than 90 seconds. Dump the test command in a bash script (e.g., `test_script.sh`, which may involve additional setups like environment variables) for later use.
+
+4. Trigger the test command, **directing the output to a log file** (e.g., using `bash test_script.sh > test_output_existing_tests.log 2>&1`) because the test output can be very long. View the log file (e.g., using `head` or `tail`) to verify the results.
+
+5. If not all tests pass, it may be due to flakiness or environment issues; just exclude them from the test command or find another set until all selected tests pass (still needs to satisfy the minimum passing tests requirement: >= {min_passing_tests}).
+
+6. Write a generic parser script in Python that can parse any test log file output by your test command. The test script should read from stdin the test log output and writes to stdout a JSON summary mapping each executed test case to either "passed" or "failed". Verify that your parser works. Example usage and output:
+
+```bash
+cat test_output_existing_tests.log | python3 parse_test_output.py > test_output_existing_tests.json && head -n 20 test_output_existing_tests.json
+```
+
+Expected output format:
+{{
+"test_module1.py::TestClass::test_method1": "passed",
+"test_module2.py::test_function2": "passed",
+...
+}}
+
+7. **Introduce bugs**: Based on your exploration in step 2, introduce bugs to at least {min_changed_files} code files.
+8. Run the original test command again and make sure some tests fail, meaning the bug breaks some functionality. Don't introduce trivial syntax errors that make all tests fail. Still, redirect the output to a log file (e.g., `bash test_script.sh > test_output_bug_code.log 2>&1`) to view the results. Also, verify that your parser script can correctly parse the test results log and summarize which tests passed or failed. For example:
+
+```bash
+bash test_script.sh > test_output_bug_code.log 2>&1 && cat test_output_bug_code.log | python3 parse_test_output.py > test_output_bug_code.json && cat test_output_bug_code.json | grep "failed"
+```
+
+9. **Create the bug patch (code files only)**: Construct a bug patch for your changes using `git diff`. For example, `git diff > bug_patch.diff`. Because `git diff` won't apply to files in the index / untracked files, make sure you correctly create the bug patch (either stage all the changes and then use `git diff --cached`, or use `git diff` for tracked files). Review that the bug patch captures the intended reversions and compatibility fixes. **Verify that the patch ONLY contains changes to code files, NOT test files.**
+
+10. **Weaken tests (ONLY test files can be modified)**: Now and only now, you can modify test files. Weaken / remove some of the test cases that would catch your bug, creating a "test gap" where some bugs can hide. **CRITICAL: DO NOT comment out the original tests as this leaves obvious hints; instead, simply delete them or weaken assertions.**
+
+11. **Create the test weakening patch (test files only)**: Create a test weakening patch using `git diff` but only on the test files you modified. **Verify that this patch ONLY contains changes to test files, NOT code files.**
+### IMPORTANT REQUIREMENTS
+1. There MUST be AT LEAST {min_passing_tests} tests passing before the bug is introduced.
+2. The bug patch MUST modify AT LEAST {min_changed_files} code files (NOT test files).
+3. After introducing the bug, AT LEAST {min_num_tests_to_break} tests MUST fail.
+4. You MUST NOT leave any hints that reveals your bug injection intention. DO NOT leave comments like "introduce bug here" in your patches. DO NOT leave the original correct code in comments.
+5. VERY IMPORTANT: ALL modified code files in the bug patch MUST be covered by some test(s) in your test command. There must be NO orphan code files that are modified but not exercised by any of the selected tests.
+### Required files to submit
+1. test_files.txt: A text file listing all the test files you selected in step 2
+2. test_script.sh: A bash script specifying how to run the tests
+3. parse_test_output.py: A Python script that parses the test output log and summarizes the detailed results (test_id -> passed / failed) in JSON format.
+4. bug_patch.diff: A git diff patch that introduces the bug into the code.
+5. test_patch.diff: A git diff patch that removes/weakens tests to hide the bug.
+### Submission format
+When you have created all 5 required files, submit by running:
+
+```bash
+echo "SSR_BUG_ARTIFACT_SUBMIT" && ls -la test_files.txt test_script.sh parse_test_output.py bug_patch.diff test_patch.diff
+```
+
+I've uploaded the corresponding code repository at {repo_root} and installed all the necessary dependencies. Now, the bash session has started, with the current working directory set to the repo root.
+"""
+
+
+# =============================================================================
+# BUG SOLVING PROMPTS (from bug_solving_prompts.txt)
+# =============================================================================
+
+# Fixed-template issue description specified by the oracle test patch
+BUG_SOLVER_ISSUE_TEMPLATE = """I am improving the test suite of the project with the following changes, but the current code does not pass the tests. Please fix the code. If any existing tests relevant to the functionality being changed are failing, please make sure your patch passes those tests as well.
+
+```diff
+{oracle_test_patch}
+```"""
+
+# Prompt template for bug-solving
+BUG_SOLVER_PROMPT = """Solve the following issue by implementing the necessary code changes and submitting a patch file:
+<issue_description>
+{issue}
+</issue_description>
+The submission should be the path to a patch file that resolves the issue. This file must be accessible from the current working directory and should contain the end-to-end code changes in git diff format. You can refine and submit your patch multiple times as needed to ensure correctness.
+
+When you've completed your changes or can't make further progress, submit by running:
+
+```bash
+echo "SSR_SOLVER_SUBMIT" && git add -A && git diff --cached > solution.patch && cat solution.patch
+```
+
+Again, if you have enough budget, you should try to fully utilize it by doing more testing, checking edge cases, or even considering alternative solutions. This will help you gain more confidence in your submission. DO AS MUCH TESTING AS POSSIBLE WHENEVER YOU HAVE BUDGET. The testing involves developing new tests, confirming no existing tests are broken, and checking edge cases. Only submit when all the relevant tests pass!!
+
+I've uploaded the corresponding code repository at {repo_root} and installed all the necessary dependencies. Now, the bash session has started, with the current working directory set to the repo root.
+"""
+
+
+def format_injector_prompt(
+    prompt_type: str = "removal",
+    repo_root: str = "/testbed",
+    min_passing_tests: int = DEFAULT_MIN_PASSING_TESTS,
+    min_changed_files: int = DEFAULT_MIN_CHANGED_FILES,
+    min_num_tests_to_break: int = DEFAULT_MIN_NUM_TESTS_TO_BREAK,
+) -> str:
+    """Format a bug injector prompt with the given parameters.
+
+    Returns the system template + task-specific prompt combined.
+    """
+    prompts = {
+        "removal": BUG_INJECTOR_REMOVAL_PROMPT,
+        "history": BUG_INJECTOR_HISTORY_PROMPT,
+        "direct": BUG_INJECTOR_DIRECT_PROMPT,
+    }
+
+    template = prompts.get(prompt_type, BUG_INJECTOR_REMOVAL_PROMPT)
+
+    task_prompt = template.format(
+        repo_root=repo_root,
+        min_passing_tests=min_passing_tests,
+        min_changed_files=min_changed_files,
+        min_num_tests_to_break=min_num_tests_to_break,
+    )
+
+    return SYSTEM_TEMPLATE + "\n\n" + task_prompt
+
+
+def format_solver_issue(oracle_test_patch: str) -> str:
+    """Format the issue description using the oracle test patch."""
+    return BUG_SOLVER_ISSUE_TEMPLATE.format(oracle_test_patch=oracle_test_patch)
+
+
+def format_solver_prompt(
+    oracle_test_patch: str,
+    repo_root: str = "/testbed",
+) -> str:
+    """Format a bug solver prompt with the given oracle test patch.
+
+    Returns the system template + solver prompt combined.
+    """
+    # First format the issue using the oracle test patch
+    issue = format_solver_issue(oracle_test_patch)
+
+    # Then format the full solver prompt
+    task_prompt = BUG_SOLVER_PROMPT.format(
+        issue=issue,
+        repo_root=repo_root,
+    )
+
+    return SYSTEM_TEMPLATE + "\n\n" + task_prompt
