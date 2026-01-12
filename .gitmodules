@@ -1,0 +1,3 @@
+[submodule "qwen-code"]
+	path = qwen-code
+	url = https://github.com/GaokaiZhang/qwen-code.git
