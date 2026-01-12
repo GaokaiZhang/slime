@@ -135,7 +135,7 @@ def load_instances_from_file(
 
 def load_django_instances(
     split_type: str = "all",  # "all", "train", "test", "part_a", "part_b"
-    data_dir: str = "/home/gaokaizhang/SWE-sft/data/raw/splits",
+    data_dir: str = None,
 ) -> List[SWEBenchInstance]:
     """
     Load Django SWE-bench instances from predefined splits.
@@ -147,6 +147,10 @@ def load_django_instances(
     Returns:
         List of SWEBenchInstance objects
     """
+    # Default to local data directory
+    if data_dir is None:
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+
     split_files = {
         "all": "all_231_django.txt",
         "part_a": "part_a_116.txt",
@@ -189,8 +193,8 @@ class SWEBenchDataSource(DataSource):
         elif hasattr(args, "swe_split") and args.swe_split:
             self.instances = load_django_instances(args.swe_split)
         else:
-            # Default: use train split
-            default_file = "/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt"
+            # Default: use train split (local copy in examples/qwen_swe/data/)
+            default_file = os.path.join(os.path.dirname(__file__), "data", "train_201_django.txt")
             if os.path.exists(default_file):
                 self.instances = load_instances_from_file(default_file)
             else:

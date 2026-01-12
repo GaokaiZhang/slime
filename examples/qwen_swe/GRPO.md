@@ -142,7 +142,7 @@ instance_A: sample_0=+1, sample_1=-1 → mean=0 → advantages: +1, -1
 
 - Dataset: `princeton-nlp/SWE-bench_Verified`
 - Train: 201 Django instances
-- Instance list: `/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt`
+- Instance list: `examples/qwen_swe/data/train_201_django.txt`
 
 ---
 

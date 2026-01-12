@@ -44,7 +44,7 @@ async def main():
     # Load data
     logger.info("Loading SWE-bench instances...")
     data_source = create_data_source(Namespace(
-        swe_instance_file="/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt",
+        swe_instance_file="os.path.join(os.path.dirname(__file__), "data", "train_201_django.txt")",
         swe_split=None,
         n_samples_per_prompt=1,
         rollout_shuffle=False,
@@ -52,7 +52,7 @@ async def main():
 
     # Get sample
     if args.instance_id:
-        instances = load_instances_from_file("/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt")
+        instances = load_instances_from_file("os.path.join(os.path.dirname(__file__), "data", "train_201_django.txt")")
         instance = next((i for i in instances if i.instance_id == args.instance_id), None)
         if not instance:
             logger.error(f"Instance {args.instance_id} not found")

@@ -17,7 +17,8 @@ cd /home/gaokaizhang/slime
 # Configuration
 export VLLM_URL="${VLLM_URL:-http://localhost:8000}"
 MODEL="${MODEL:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
-INSTANCE_FILE="${INSTANCE_FILE:-/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCE_FILE="${INSTANCE_FILE:-$SCRIPT_DIR/data/train_201_django.txt}"
 
 # Training parameters
 NUM_ROLLOUTS="${NUM_ROLLOUTS:-10}"

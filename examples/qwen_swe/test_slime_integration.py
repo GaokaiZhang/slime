@@ -35,7 +35,7 @@ def test_data_source():
     logger.info("Testing data source...")
 
     args = Namespace(
-        swe_instance_file="/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt",
+        swe_instance_file="os.path.join(os.path.dirname(__file__), "data", "train_201_django.txt")",
         swe_split=None,
         n_samples_per_prompt=2,
         rollout_shuffle=False,
@@ -198,7 +198,7 @@ async def main():
         if args.instance_id:
             # Find specific instance
             from examples.qwen_swe.data_source import load_instances_from_file
-            instances = load_instances_from_file("/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt")
+            instances = load_instances_from_file("os.path.join(os.path.dirname(__file__), "data", "train_201_django.txt")")
             for inst in instances:
                 if inst.instance_id == args.instance_id:
                     from examples.qwen_swe.prompts import format_swebench_prompt

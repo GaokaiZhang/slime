@@ -36,7 +36,7 @@ def add_qwen_swe_args(parser):
     group.add_argument(
         "--swe_instance_file",
         type=str,
-        default="/home/gaokaizhang/SWE-sft/data/raw/splits/train_201_django.txt",
+        default=os.path.join(os.path.dirname(__file__), "data", "train_201_django.txt"),
         help="Path to file with SWE-bench instance IDs",
     )
     group.add_argument(
