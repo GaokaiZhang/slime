@@ -8,7 +8,7 @@
 # 2. Docker daemon running with SWE-bench images
 #
 # Usage:
-#    bash run_grpo.sh
+#    bash examples/qwen_swe/run_grpo.sh
 
 set -e
 

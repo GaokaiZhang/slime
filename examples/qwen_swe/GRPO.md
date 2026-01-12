@@ -10,7 +10,7 @@ python examples/qwen_swe/start_vllm.py --port 8000 --tp 8
 
 # Terminal 2: Run training
 cd /home/gaokaizhang/slime
-bash run_grpo.sh
+bash examples/qwen_swe/run_grpo.sh
 ```
 
 ### Option B: Modal GPU
@@ -21,7 +21,7 @@ modal deploy examples/qwen_swe/modal_inference.py
 
 # Terminal 2: Run training with Modal URL
 export VLLM_URL="https://susvibes-mitigation--qwen-swe-inference-serve-vllm.modal.run"
-bash run_grpo.sh
+bash examples/qwen_swe/run_grpo.sh
 
 # When done, stop Modal to save costs
 modal app stop qwen-swe-inference
@@ -87,6 +87,7 @@ Key SLiME integrations:
 
 | File | Description |
 |------|-------------|
+| `run_grpo.sh` | Training launch script |
 | `run_qwen_swe.py` | Training entry point (configures SLiME's train.py) |
 | `start_vllm.py` | Local vLLM server launcher |
 | `modal_inference.py` | Modal vLLM server deployment |
