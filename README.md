@@ -47,6 +47,37 @@ For a comprehensive quick start guide covering environment setup, data preparati
 
 We also provide examples for some use cases not covered in the quick start guide; please check [examples](examples/).
 
+### Harbor Integration for SWE-bench
+
+This fork integrates [Harbor](https://github.com/laude-institute/harbor) for running GRPO training on SWE-bench tasks. The architecture:
+
+- **SLiME**: RL training framework (GRPO loss, model updates)
+- **Harbor**: Agent rollout environments (Docker containers, trajectory collection)
+
+```bash
+# Setup (requires Python 3.12+)
+conda activate hb_train
+pip install -e .
+pip install -e submodules/harbor
+
+# Deploy vLLM inference server on Modal
+modal deploy examples/harbor/modal_vllm.py
+
+# Test the pipeline
+PYTHONPATH=$PWD python examples/harbor/test_pipeline.py
+
+# Run GRPO training
+export VLLM_URL="https://<your-modal-url>"
+bash examples/harbor/run_grpo.sh
+```
+
+Key features:
+- **ATIF trajectories**: Records `completion_token_ids` and `logprobs` for RL training
+- **Search-R1 hyperparameters**: `lr=1e-6`, `kl_loss_coef=0.001`, `temperature=1.0`
+- **Loss masking**: Assistant tokens only (10.7% train ratio)
+
+See [STATUS.md](STATUS.md) for detailed implementation status.
+
 ## Projects Built upon slime
 
 slime has powered several novel research projects and production systems. Here are some notable examples:
