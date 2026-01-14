@@ -1,3 +1,6 @@
-[submodule "qwen-code"]
-	path = qwen-code
+[submodule "submodules/qwen-code"]
+	path = submodules/qwen-code
 	url = https://github.com/GaokaiZhang/qwen-code.git
+[submodule "submodules/harbor"]
+	path = submodules/harbor
+	url = https://github.com/GaokaiZhang/harbor.git
