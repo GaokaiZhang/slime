@@ -18,8 +18,12 @@ from slime.utils.types import Sample
 from .qwen_agent import (
     QwenAgentConfig,
     setup_container,
-    run_qwen_agent,
     cleanup_container,
+)
+# Use simple_agent instead of qwen-code CLI (avoids streaming issues with vLLM)
+from .simple_agent import (
+    SimpleAgentConfig,
+    run_simple_agent,
 )
 from .rewards import evaluate_with_swebench_harness
 
@@ -250,24 +254,26 @@ async def generate(
         # Get vLLM URL from args or environment
         vllm_url = getattr(args, "vllm_url", None) or os.environ.get("VLLM_URL", "http://localhost:8000")
         
-        # Setup agent config
-        config = QwenAgentConfig(
+        # Setup agent config (using simple_agent to avoid qwen-code CLI streaming issues)
+        config = SimpleAgentConfig(
             model_name=getattr(args, "qwen_model_name", "Qwen/Qwen3-Coder-30B-A3B-Instruct"),
             api_base_url=vllm_url,
             max_turns=getattr(args, "qwen_max_turns", 50),
             timeout=getattr(args, "qwen_timeout", 1800),
+            max_tokens=getattr(args, "rollout_max_response_len", 4096),
+            temperature=getattr(args, "rollout_temperature", 0.7),
         )
-        
+
         # Setup container
         container_name = await asyncio.to_thread(
             setup_container,
             instance_id,
             suffix=f"_{sample.index}",
         )
-        
+
         # Run agent
         result = await asyncio.to_thread(
-            run_qwen_agent,
+            run_simple_agent,
             container_name,
             instance_id,
             sample.prompt,

@@ -1,18 +1,8 @@
 """
-Modal vLLM server for qwen-code agent inference.
+Modal vLLM server for Harbor GRPO training.
 
-This script deploys a vLLM server on Modal with tool calling support
-for use with qwen-code CLI.
-
-Usage:
-    # Deploy the server (keeps running)
-    modal deploy examples/qwen_swe/modal_inference.py
-
-    # Or run temporarily for testing
-    modal serve examples/qwen_swe/modal_inference.py
-
-    # Test the endpoint
-    curl https://YOUR_MODAL_URL/v1/models
+Deploys a vLLM server on Modal with A100-80GB GPU for inference.
+Uses logprobs for RL training.
 """
 
 import modal
@@ -22,11 +12,9 @@ import threading
 import time
 
 # Modal app
-app = modal.App("qwen-swe-inference")
+app = modal.App("harbor-grpo-vllm")
 
 # Configuration
-# Default model: Qwen3-Coder-30B for agent tasks
-# Can override with environment variable MODEL_NAME
 DEFAULT_MODEL_NAME = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
 DEFAULT_MAX_MODEL_LEN = 32768
 
@@ -46,18 +34,18 @@ image = (
 )
 
 # Volume for caching model weights
-model_cache = modal.Volume.from_name("qwen-swe-cache", create_if_missing=True)
+model_cache = modal.Volume.from_name("harbor-grpo-cache", create_if_missing=True)
 
-# HuggingFace token secret - create with: modal secret create hf-token-swe HF_TOKEN=<your_token>
+# HuggingFace token secret
 hf_secret = modal.Secret.from_name("hf-token-swe")
 
-# Global vLLM process state
+# Global vLLM state
 vllm_process = None
 vllm_ready = False
 
 
 def get_config():
-    """Get configuration from environment variables."""
+    """Get configuration from environment."""
     return {
         "model_name": os.environ.get("MODEL_NAME", DEFAULT_MODEL_NAME),
         "max_model_len": int(os.environ.get("MAX_MODEL_LEN", DEFAULT_MAX_MODEL_LEN)),
@@ -70,7 +58,7 @@ def create_fastapi_app():
     from fastapi.responses import JSONResponse
     import httpx
 
-    app = FastAPI(title="Qwen-SWE vLLM Server")
+    app = FastAPI(title="Harbor GRPO vLLM Server")
 
     def start_vllm_background():
         """Start vLLM OpenAI-compatible server in background."""
@@ -93,10 +81,7 @@ def create_fastapi_app():
             "HUGGING_FACE_HUB_TOKEN": hf_token,
         }
 
-        # vLLM command for Qwen3-Coder
-        # NOTE: Do NOT use --enable-auto-tool-choice for Qwen-Agent/qwen-code
-        # Qwen-Agent handles tool parsing internally from the raw response
-        # Reference: https://qwen.readthedocs.io/en/latest/deployment/vllm.html
+        # vLLM command - no auto-tool-choice (we handle tools in prompts)
         cmd = [
             "python", "-m", "vllm.entrypoints.openai.api_server",
             "--model", model_name,
@@ -190,7 +175,7 @@ def create_fastapi_app():
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
-        """Proxy chat completions to vLLM with tool calling support."""
+        """Proxy chat completions to vLLM."""
         if not vllm_ready:
             return JSONResponse({"error": "Model still loading"}, status_code=503)
 
@@ -203,27 +188,6 @@ def create_fastapi_app():
                 content=body,
                 headers=headers,
                 timeout=600,  # 10 minutes for long completions
-            )
-            return Response(
-                content=response.content,
-                media_type=response.headers.get("content-type", "application/json"),
-            )
-
-    @app.post("/v1/completions")
-    async def completions(request: Request):
-        """Proxy completions to vLLM."""
-        if not vllm_ready:
-            return JSONResponse({"error": "Model still loading"}, status_code=503)
-
-        body = await request.body()
-        headers = {"Content-Type": "application/json"}
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://127.0.0.1:8000/v1/completions",
-                content=body,
-                headers=headers,
-                timeout=600,
             )
             return Response(
                 content=response.content,
@@ -263,7 +227,7 @@ def create_fastapi_app():
     volumes={"/root/.cache/huggingface": model_cache},
     scaledown_window=900,  # Keep warm for 15 minutes
     min_containers=1,
-    max_containers=4,  # Scale up to 4 GPUs under load
+    max_containers=4,
 )
 @modal.asgi_app()
 def serve_vllm():
@@ -271,73 +235,19 @@ def serve_vllm():
     return create_fastapi_app()
 
 
-@app.function(
-    image=image,
-    gpu="A100-80GB",
-    timeout=3600,
-    secrets=[hf_secret],
-    volumes={"/root/.cache/huggingface": model_cache},
-)
-def test_model():
-    """Test that the model loads and generates correctly."""
-    from vllm import LLM, SamplingParams
-
-    config = get_config()
-    model_name = config["model_name"]
-    max_model_len = config["max_model_len"]
-
-    print(f"Loading model {model_name}...")
-
-    llm = LLM(
-        model=model_name,
-        max_model_len=max_model_len,
-        trust_remote_code=True,
-        dtype="bfloat16",
-    )
-
-    print("Model loaded! Testing generation...")
-
-    prompts = ["Write a Python function that adds two numbers:"]
-    sampling_params = SamplingParams(max_tokens=100, temperature=0.7)
-
-    outputs = llm.generate(prompts, sampling_params)
-
-    for output in outputs:
-        print(f"Prompt: {output.prompt!r}")
-        print(f"Generated: {output.outputs[0].text!r}")
-
-    return {"success": True, "model": model_name}
-
-
 @app.local_entrypoint()
 def main(action: str = "info"):
-    """
-    Main entrypoint.
-
-    Args:
-        action: info (show URL info), test (test model loading)
-    """
+    """Main entrypoint."""
     config = get_config()
 
-    if action == "test":
-        print("Testing model loading...")
-        result = test_model.remote()
-        print(f"Result: {result}")
-    elif action == "info":
+    if action == "info":
         print("=" * 60)
-        print("SWE-bench GRPO vLLM Server")
+        print("Harbor GRPO vLLM Server")
         print("=" * 60)
         print(f"\nConfiguration:")
         print(f"  Model: {config['model_name']}")
         print(f"  Max model len: {config['max_model_len']}")
-        print("\nFeatures:")
-        print("  - Tool calling enabled (--enable-auto-tool-choice)")
-        print("  - Hermes function calling parser")
         print("\nTo deploy the server, run:")
-        print("  modal deploy examples/qwen_swe/modal_inference.py")
+        print("  modal deploy examples/harbor/modal_vllm.py")
         print("\nTo serve temporarily, run:")
-        print("  modal serve examples/qwen_swe/modal_inference.py")
-        print("\nAfter deployment, the endpoint will be at:")
-        print("  https://susvibes-mitigation--qwen-swe-inference-serve-vllm.modal.run")
-    else:
-        print(f"Unknown action: {action}")
+        print("  modal serve examples/harbor/modal_vllm.py")
