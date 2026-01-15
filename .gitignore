@@ -192,3 +192,5 @@ glm/
 _examples_synced/
 .env
 .DS_Storeqwen_swe.eval_*.json
+logs/
+outputs/

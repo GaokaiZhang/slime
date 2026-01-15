@@ -252,14 +252,51 @@ class DjangoTrainDataSource(SWEBenchVerifiedDataSource):
     DataSource for Django training instances from SWE-Bench_Verified.
 
     Focuses on django/django repository for targeted training.
+    Uses the 201 train instances from train_instances_id.txt.
     """
 
     def __init__(self, args=None, limit: int | None = None, **kwargs):
-        # Use django/django repo only
+        # Load train instance IDs from file
+        train_ids_file = Path(__file__).parent.parent.parent / "train_instances_id.txt"
+        train_ids = None
+        if train_ids_file.exists():
+            with open(train_ids_file) as f:
+                train_ids = [line.strip() for line in f if line.strip()]
+            logger.info(f"Loaded {len(train_ids)} train instance IDs from {train_ids_file}")
+
+        # Use django/django repo only with train subset
         super().__init__(
             args=args,
             repos=["django/django"],
+            subset=train_ids,
             limit=limit,
+            **kwargs,
+        )
+
+
+class DjangoTestDataSource(SWEBenchVerifiedDataSource):
+    """
+    DataSource for Django test instances from SWE-Bench_Verified.
+
+    Uses the 30 test instances from test_instances_id.txt.
+    """
+
+    def __init__(self, args=None, limit: int | None = None, **kwargs):
+        # Load test instance IDs from file
+        test_ids_file = Path(__file__).parent.parent.parent / "test_instances_id.txt"
+        test_ids = None
+        if test_ids_file.exists():
+            with open(test_ids_file) as f:
+                test_ids = [line.strip() for line in f if line.strip()]
+            logger.info(f"Loaded {len(test_ids)} test instance IDs from {test_ids_file}")
+
+        # Use django/django repo only with test subset
+        super().__init__(
+            args=args,
+            repos=["django/django"],
+            subset=test_ids,
+            limit=limit,
+            shuffle=False,  # Don't shuffle test data
             **kwargs,
         )
 
@@ -274,7 +311,7 @@ def create_data_source(
 
     Args:
         args: Training arguments
-        dataset_type: Type of dataset ("swebench_verified", "django_train")
+        dataset_type: Type of dataset ("swebench_verified", "django_train", "django_test")
         **kwargs: Additional arguments passed to data source
 
     Returns:
@@ -284,6 +321,8 @@ def create_data_source(
         return SWEBenchVerifiedDataSource(args=args, **kwargs)
     elif dataset_type == "django_train":
         return DjangoTrainDataSource(args=args, **kwargs)
+    elif dataset_type == "django_test":
+        return DjangoTestDataSource(args=args, **kwargs)
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
 

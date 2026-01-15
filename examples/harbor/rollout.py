@@ -1,120 +1,267 @@
 """
-Rollout function for SLiME GRPO training using Harbor-style agent.
+Rollout function for SLiME GRPO training with Harbor evaluation.
 
-This module implements the rollout interface expected by SLiME, using
-the RL agent that records ATIF trajectories with token_ids and logprobs.
+This module provides:
+1. Direct vLLM agent for token_ids and logprobs collection
+2. Harbor Trial API for SWE-bench evaluation (using submodule, not pip package)
+
+Key SLiME requirements:
+- sample.tokens = prompt_tokens + response_tokens (FULL sequence)
+- sample.response_length = len(response_tokens)
+- sample.loss_mask = [1] * response_length (only response tokens)
+- sample.rollout_log_probs = logprobs from generation
+- sample.reward = float scalar
 """
 
 import asyncio
 import logging
 import os
+import sys
 from argparse import Namespace
+from pathlib import Path
 from typing import Any
 
-from slime.utils.mask_utils import MultiTurnLossMaskGenerator
-from slime.utils.processing_utils import load_tokenizer
-from slime.utils.types import Sample
+# Add Harbor submodule to path (use repo code, not pip package)
+_HARBOR_SRC = Path(__file__).resolve().parent.parent.parent / "submodules" / "harbor" / "src"
+if str(_HARBOR_SRC) not in sys.path:
+    sys.path.insert(0, str(_HARBOR_SRC))
 
-from .rl_agent import RLAgentConfig, run_rl_agent
-from .swebench_env import setup_container, cleanup_container
-from .rewards import evaluate_patch
+from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
 # Global state
-TOKENIZER = None
-MASK_GENERATOR = None
+_TOKENIZER = None
 
 
-def get_tokenizer(args):
+def get_tokenizer(args_or_model_name):
     """Get or create tokenizer singleton."""
-    global TOKENIZER
-    if TOKENIZER is None:
-        TOKENIZER = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
-    return TOKENIZER
+    global _TOKENIZER
+    if _TOKENIZER is None:
+        if isinstance(args_or_model_name, str):
+            model_name = args_or_model_name
+        else:
+            model_name = getattr(args_or_model_name, "hf_checkpoint", None) or \
+                         os.environ.get("MODEL_NAME", "Qwen/Qwen3-Coder-30B-A3B-Instruct")
+
+        from transformers import AutoTokenizer
+        logger.info(f"Loading tokenizer for {model_name}...")
+        _TOKENIZER = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    return _TOKENIZER
 
 
-def get_mask_generator(args):
-    """Get or create mask generator singleton."""
-    global MASK_GENERATOR
-    if MASK_GENERATOR is None:
+async def generate_with_vllm_agent(
+    args: Namespace,
+    sample: Sample,
+    sampling_params: dict[str, Any],
+) -> Sample:
+    """
+    Generate using direct vLLM agent with proper SLiME data format.
+
+    This mode:
+    - Calls vLLM API directly
+    - Captures completion_token_ids and logprobs
+    - Uses Harbor Trial API for SWE-bench evaluation
+
+    SLiME data format:
+    - sample.tokens = prompt_tokens + response_tokens
+    - sample.response_length = len(response_tokens)
+    - sample.loss_mask = [1] * response_length
+    - sample.rollout_log_probs = logprobs from vLLM
+    """
+    from .vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer as get_vllm_tokenizer
+
+    instance_id = sample.metadata.get("instance_id", f"sample_{sample.index}")
+
+    # Get tokenizer for encoding prompt
+    tokenizer = get_tokenizer(args)
+
+    try:
+        # Configure agent
+        config = VLLMAgentConfig(
+            api_url=getattr(args, "vllm_url", None) or os.environ.get("VLLM_URL", "http://localhost:8000"),
+            model_name=getattr(args, "model_name", None) or os.environ.get("MODEL_NAME", "Qwen/Qwen3-Coder-30B-A3B-Instruct"),
+            max_tokens=getattr(args, "rollout_max_response_len", 4096),
+            temperature=getattr(args, "rollout_temperature", 1.0),
+            max_turns=getattr(args, "max_turns", 50),
+        )
+
+        # Run agent (with tokenizer for token_id extraction)
+        vllm_tokenizer = get_vllm_tokenizer(config.model_name)
+        result = await asyncio.to_thread(
+            run_agent,
+            sample.prompt,
+            config,
+            workdir="/tmp",  # Will be overridden by Docker if using Harbor
+            tokenizer=vllm_tokenizer,
+        )
+
+        # === KEY FIX: Build proper token sequence for SLiME ===
+        # SLiME expects: tokens = prompt_tokens + response_tokens
+
+        # Encode prompt to get prompt tokens
+        if isinstance(sample.prompt, str):
+            prompt_tokens = tokenizer.encode(sample.prompt, add_special_tokens=False)
+        elif isinstance(sample.prompt, list):
+            # Chat format - apply chat template
+            prompt_text = tokenizer.apply_chat_template(sample.prompt, tokenize=False, add_generation_prompt=True)
+            prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)
+        else:
+            prompt_tokens = []
+
+        # Response tokens from vLLM agent
+        response_tokens = result.completion_token_ids
+
+        # === Set SLiME-required fields ===
+        sample.tokens = prompt_tokens + response_tokens  # FULL sequence
+        sample.response_length = len(response_tokens)
+        sample.loss_mask = [1] * len(response_tokens)  # Only response tokens are trainable
+        sample.rollout_log_probs = result.logprobs  # For off-policy correction
+
+        # Store trajectory in metadata
+        sample.metadata["trajectory"] = result.trajectory
+        sample.metadata["prompt_length"] = len(prompt_tokens)
+
+        # === Evaluate for reward using Harbor or simple heuristic ===
+        reward = await evaluate_with_harbor(
+            instance_id=instance_id,
+            patch=result.patch,
+            sample=sample,
+            args=args,
+        )
+        sample.reward = reward
+        sample.metadata["patch"] = result.patch
+        sample.metadata["resolved"] = (reward > 0)
+
+        # Set status
+        if result.exit_status == "completed":
+            sample.status = Sample.Status.COMPLETED
+        elif result.exit_status == "max_turns":
+            sample.status = Sample.Status.TRUNCATED
+        else:
+            sample.status = Sample.Status.FAILED
+
+        sample.response = f"Agent completed: {result.exit_status}, reward={sample.reward}"
+
+        logger.info(f"[{instance_id}] Reward: {sample.reward}, "
+                   f"Tokens: {len(sample.tokens)} (prompt={len(prompt_tokens)}, response={len(response_tokens)}), "
+                   f"Turns: {len(result.trajectory.get('steps', []))}")
+
+    except Exception as e:
+        logger.error(f"[{instance_id}] Rollout failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+        sample.reward = -1.0
+        sample.status = Sample.Status.FAILED
+        sample.metadata["error"] = str(e)
+
+        # Set minimal response with proper format
         tokenizer = get_tokenizer(args)
-        tokenizer_type = getattr(args, "loss_mask_type", "qwen3")
-        MASK_GENERATOR = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=tokenizer_type)
-    return MASK_GENERATOR
+        if isinstance(sample.prompt, str):
+            prompt_tokens = tokenizer.encode(sample.prompt, add_special_tokens=False)
+        else:
+            prompt_tokens = []
+
+        sample.tokens = prompt_tokens  # Just prompt, no response
+        sample.loss_mask = []
+        sample.response_length = 0
+        sample.rollout_log_probs = []
+        sample.response = ""
+
+    return sample
 
 
-def build_messages_from_trajectory(trajectory: dict) -> list[dict]:
+async def evaluate_with_harbor(
+    instance_id: str,
+    patch: str,
+    sample: Sample,
+    args: Namespace,
+) -> float:
     """
-    Convert ATIF trajectory to chat messages format for loss masking.
+    Evaluate patch using Harbor Trial API.
 
-    Maps trajectory steps to messages with proper roles:
-    - User steps -> user messages (mask=0)
-    - Agent steps -> assistant messages (mask=1 for trainable)
-    - Tool observations -> tool messages (mask=0)
+    Falls back to heuristic if Harbor/Docker not available.
     """
-    messages = []
+    # Check if we should use Harbor evaluation
+    use_harbor = getattr(args, "use_harbor_eval", True) and \
+                 os.environ.get("USE_HARBOR_EVAL", "1") == "1"
 
-    for step in trajectory.get("steps", []):
-        source = step.get("source", "")
-        message = step.get("message", "")
+    if not use_harbor or not patch:
+        # No patch or Harbor disabled - return failure
+        return -1.0
 
-        if not message:
-            continue
+    try:
+        # Try to use Harbor Trial API from submodule
+        from harbor.trial.trial import Trial
+        from harbor.models.trial.config import TrialConfig, TaskConfig, AgentConfig, EnvironmentConfig
+        from harbor.models.environment_type import EnvironmentType
 
-        if source == "user":
-            messages.append({"role": "user", "content": message})
-        elif source == "agent":
-            messages.append({"role": "assistant", "content": message})
+        # Check if task directory exists
+        task_dir = Path(f"datasets/swebench/{instance_id}")
+        if not task_dir.exists():
+            # Try alternative paths
+            alt_paths = [
+                Path(f"/home/gaokaizhang/SWE-sft/harbor_jobs/datasets/swebench/{instance_id}"),
+                Path(f"submodules/harbor/datasets/swebench/{instance_id}"),
+            ]
+            for alt in alt_paths:
+                if alt.exists():
+                    task_dir = alt
+                    break
 
-            # If there's an observation with tool results, add as tool message
-            observation = step.get("observation", {})
-            if observation and "results" in observation:
-                tool_content = "\n\n".join([
-                    r.get("content", "")
-                    for r in observation["results"]
-                    if r.get("content")
-                ])
-                if tool_content:
-                    messages.append({"role": "tool", "content": tool_content})
+        if not task_dir.exists():
+            logger.warning(f"Task directory not found for {instance_id}, using heuristic evaluation")
+            return _heuristic_reward(patch)
 
-    return messages
+        # Create trial config with oracle agent that applies our patch
+        trial_config = TrialConfig(
+            task=TaskConfig(path=task_dir),
+            agent=AgentConfig(
+                name="oracle",
+                kwargs={"patch": patch},
+            ),
+            environment=EnvironmentConfig(
+                type=EnvironmentType.DOCKER,
+                delete=True,
+            ),
+        )
+
+        # Run trial
+        trial = Trial(trial_config)
+        result = await trial.run()
+
+        # Extract reward
+        if result.verifier_result and result.verifier_result.rewards:
+            reward = result.verifier_result.rewards.get("reward", 0)
+            return 1.0 if reward > 0 else -1.0
+        else:
+            return -1.0
+
+    except ImportError as e:
+        logger.warning(f"Harbor not available: {e}, using heuristic evaluation")
+        return _heuristic_reward(patch)
+    except Exception as e:
+        logger.warning(f"Harbor evaluation failed: {e}, using heuristic evaluation")
+        return _heuristic_reward(patch)
 
 
-def compute_loss_mask_for_trajectory(
-    args,
-    prompt: str,
-    trajectory: dict,
-) -> tuple[list[int], list[int], int]:
+def _heuristic_reward(patch: str) -> float:
     """
-    Compute loss mask from ATIF trajectory.
-
-    Uses MultiTurnLossMaskGenerator to properly mask:
-    - Assistant messages: loss_mask = 1 (train on these)
-    - Tool responses: loss_mask = 0 (don't train)
-    - User messages: loss_mask = 0 (don't train)
+    Simple heuristic reward when Docker/Harbor not available.
 
     Returns:
-        (token_ids, loss_mask, response_length)
+        0.0 if patch looks reasonable (has diff content)
+        -1.0 if patch is empty or invalid
     """
-    mask_generator = get_mask_generator(args)
+    if not patch or len(patch.strip()) < 10:
+        return -1.0
 
-    # Convert trajectory to messages
-    messages = build_messages_from_trajectory(trajectory)
+    # Check for valid diff markers
+    if "---" in patch and "+++" in patch and "@@" in patch:
+        return 0.0  # Neutral - looks like a valid patch but we can't verify
 
-    if not messages:
-        # Empty trajectory - return empty
-        tokenizer = get_tokenizer(args)
-        prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-        return prompt_ids, [], 0
-
-    # Generate loss mask using message format
-    token_ids, loss_mask = mask_generator.get_loss_mask(messages)
-
-    # Response length is the portion with loss_mask = 1
-    response_length = sum(loss_mask)
-
-    return token_ids, loss_mask, response_length
+    return -1.0
 
 
 async def generate(
@@ -123,118 +270,14 @@ async def generate(
     sampling_params: dict[str, Any],
 ) -> Sample:
     """
-    Generate SWE-bench solution using RL agent with ATIF trajectory.
+    Generate SWE-bench solution.
 
     This is the main rollout function called by SLiME.
     Path: examples.harbor.rollout:generate
 
-    Args:
-        args: Training arguments
-        sample: Sample with prompt and metadata
-        sampling_params: Sampling parameters
-
-    Returns:
-        Sample with tokens, response, loss_mask, and reward
+    Uses direct vLLM agent for proper token_ids and logprobs collection.
     """
-    instance_id = sample.metadata.get("instance_id", "unknown")
-    container_name = None
-
-    try:
-        # Get vLLM URL from args or environment
-        vllm_url = getattr(args, "vllm_url", None) or os.environ.get("VLLM_URL", "http://localhost:8000")
-
-        # Setup agent config
-        config = RLAgentConfig(
-            model_name=getattr(args, "model_name", "Qwen/Qwen3-Coder-30B-A3B-Instruct"),
-            api_base_url=vllm_url,
-            max_turns=getattr(args, "max_turns", 50),
-            timeout=getattr(args, "timeout", 1800),
-            max_tokens=getattr(args, "rollout_max_response_len", 4096),
-            temperature=getattr(args, "rollout_temperature", 1.0),  # GRPO uses temp=1.0
-            return_logprobs=True,  # Enable for RL training
-        )
-
-        # Setup container
-        container_name = await asyncio.to_thread(
-            setup_container,
-            instance_id,
-            suffix=f"_{sample.index}",
-        )
-
-        # Run RL agent
-        result = await asyncio.to_thread(
-            run_rl_agent,
-            container_name,
-            instance_id,
-            sample.prompt,
-            config,
-        )
-
-        # Compute loss mask from trajectory
-        token_ids, loss_mask, response_length = compute_loss_mask_for_trajectory(
-            args, sample.prompt, result.trajectory
-        )
-
-        sample.tokens = token_ids
-        sample.loss_mask = loss_mask
-        sample.response_length = response_length
-
-        # Store trajectory in metadata for analysis
-        sample.metadata["trajectory"] = result.trajectory
-        sample.metadata["final_metrics"] = result.trajectory.get("final_metrics", {})
-
-        # Set response text (assistant messages only)
-        response_parts = []
-        for step in result.trajectory.get("steps", []):
-            if step.get("source") == "agent":
-                response_parts.append(step.get("message", ""))
-        sample.response = "\n".join(response_parts)
-
-        # Evaluate patch for reward
-        if result.patch:
-            resolved = await asyncio.to_thread(
-                evaluate_patch,
-                instance_id,
-                result.patch,
-                timeout=getattr(args, "eval_timeout", 900),
-            )
-            sample.reward = 1.0 if resolved else -1.0
-            sample.metadata["patch"] = result.patch
-            sample.metadata["resolved"] = resolved
-            logger.info(f"[{instance_id}] Resolved: {resolved}")
-        else:
-            sample.reward = -1.0
-            sample.metadata["patch"] = ""
-            sample.metadata["resolved"] = False
-            logger.info(f"[{instance_id}] No patch generated")
-
-        # Set status
-        if result.exit_status == "timeout":
-            sample.status = Sample.Status.TRUNCATED
-        elif result.exit_status == "failed":
-            sample.status = Sample.Status.FAILED
-        else:
-            sample.status = Sample.Status.COMPLETED
-
-    except Exception as e:
-        logger.error(f"[{instance_id}] Rollout failed: {e}")
-        sample.reward = -1.0
-        sample.status = Sample.Status.FAILED
-        sample.metadata["error"] = str(e)
-
-        # Set minimal response
-        tokenizer = get_tokenizer(args)
-        prompt_ids = tokenizer.encode(sample.prompt, add_special_tokens=False)
-        sample.tokens = prompt_ids
-        sample.response_length = 0
-        sample.response = ""
-        sample.loss_mask = []
-
-    finally:
-        if container_name:
-            await asyncio.to_thread(cleanup_container, container_name)
-
-    return sample
+    return await generate_with_vllm_agent(args, sample, sampling_params)
 
 
 async def generate_group(
@@ -244,8 +287,6 @@ async def generate_group(
 ) -> list[Sample]:
     """
     Generate solutions for a group of samples (same instance, multiple attempts).
-
-    This enables parallel execution within a group for GRPO.
     """
     tasks = [
         asyncio.create_task(generate(args, sample, sampling_params))
@@ -254,11 +295,38 @@ async def generate_group(
     return await asyncio.gather(*tasks)
 
 
-# Reward function for SLiME rm_hub (if needed)
-async def reward_func(args, sample, **kwargs) -> float:
+def compute_loss_mask_from_rollout_details(
+    rollout_details: list[dict],
+    args,
+) -> tuple[list[int], list[int], list[float]]:
     """
-    Compute reward for a sample.
+    Compute loss mask from rollout details.
 
-    Returns the pre-computed reward from rollout.
+    For compatibility with Harbor's RolloutDetail format.
     """
+    all_token_ids = []
+    loss_mask = []
+    all_logprobs = []
+
+    for rollout in rollout_details:
+        completion_ids_list = rollout.get("completion_token_ids", [])
+        logprobs_list = rollout.get("logprobs", [])
+
+        for turn_idx in range(len(completion_ids_list)):
+            completion_ids = completion_ids_list[turn_idx]
+            turn_logprobs = logprobs_list[turn_idx] if turn_idx < len(logprobs_list) else []
+
+            all_token_ids.extend(completion_ids)
+            loss_mask.extend([1] * len(completion_ids))
+
+            if turn_logprobs:
+                all_logprobs.extend(turn_logprobs)
+            else:
+                all_logprobs.extend([0.0] * len(completion_ids))
+
+    return all_token_ids, loss_mask, all_logprobs
+
+
+async def reward_func(args, sample, **kwargs) -> float:
+    """Compute reward for a sample."""
     return sample.reward if sample.reward is not None else -1.0

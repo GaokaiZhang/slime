@@ -15,7 +15,7 @@ import time
 app = modal.App("harbor-grpo-vllm")
 
 # Configuration
-DEFAULT_MODEL_NAME = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+DEFAULT_MODEL_NAME = "Kwai-Klear/Klear-AgentForge-8B-SFT"
 DEFAULT_MAX_MODEL_LEN = 32768
 
 # Create image with vLLM and dependencies

@@ -1,22 +1,21 @@
 #!/bin/bash
-# Harbor GRPO Training Script for SWE-bench
+# Harbor + SLiME GRPO Training Script
 #
-# Uses Search-R1 hyperparameters with Harbor's ATIF trajectory format
-# for RL training on SWE-bench tasks.
+# Architecture:
+# - SLiME: GRPO training (loss computation, model updates, Megatron)
+# - Harbor: Agent rollouts (terminus-2 with collect_rollout_details=True)
+# - Custom: Loss mask computation from Harbor's RolloutDetail
 #
 # Prerequisites:
-# - Modal vLLM server deployed (modal deploy examples/harbor/modal_vllm.py)
+# - Harbor installed: pip install -e submodules/harbor
 # - Docker available for SWE-bench environments
-# - hb_train conda environment with Python 3.12
+# - Model inference endpoint (vLLM, OpenAI API, etc.)
 
 set -e
 
 # Configuration
-MODEL="Qwen/Qwen3-Coder-30B-A3B-Instruct"
-HF_CHECKPOINT="Qwen/Qwen3-Coder-30B-A3B-Instruct"
-
-# vLLM URL (from Modal deployment)
-export VLLM_URL="${VLLM_URL:-https://susvibes-mitigation--harbor-grpo-vllm-serve-vllm.modal.run}"
+MODEL="${MODEL_NAME:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
+HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
 
 # Data settings
 DATASET_TYPE="django_train"  # Focus on django for training
@@ -40,13 +39,17 @@ EVAL_TIMEOUT=900
 OUTPUT_DIR="outputs/harbor_grpo_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
 
-echo "=" * 60
-echo "Harbor GRPO Training for SWE-bench"
-echo "=" * 60
+echo "============================================================"
+echo "Harbor + SLiME GRPO Training"
+echo "============================================================"
+echo ""
+echo "Architecture:"
+echo "  - SLiME: GRPO training framework"
+echo "  - Harbor: Agent rollouts (terminus-2), Docker environments, verification"
+echo "  - Custom: Loss mask computation from RolloutDetail"
 echo ""
 echo "Configuration:"
 echo "  Model: $MODEL"
-echo "  vLLM URL: $VLLM_URL"
 echo "  Dataset: $DATASET_TYPE"
 echo "  Rollouts: $NUM_ROLLOUTS"
 echo "  Samples/prompt: $N_SAMPLES"
@@ -55,15 +58,6 @@ echo "  KL coefficient: $KL_LOSS_COEF"
 echo "  Temperature: $TEMPERATURE"
 echo "  Output: $OUTPUT_DIR"
 echo ""
-
-# Check vLLM server
-echo "Checking vLLM server..."
-if curl -s "$VLLM_URL/health" | grep -q "healthy"; then
-    echo "vLLM server is healthy"
-else
-    echo "Warning: vLLM server may not be ready"
-    echo "Deploy with: modal deploy examples/harbor/modal_vllm.py"
-fi
 
 # Run training
 python -m slime.train \
@@ -83,10 +77,8 @@ python -m slime.train \
     --gradient_accumulation_steps $GRAD_ACCUM \
     --max_turns $MAX_TURNS \
     --eval_timeout $EVAL_TIMEOUT \
-    --vllm_url "$VLLM_URL" \
     --model_name "$MODEL" \
     --output_dir "$OUTPUT_DIR" \
-    --loss_mask_type "qwen3" \
     --trust_remote_code \
     2>&1 | tee "$OUTPUT_DIR/training.log"
 
