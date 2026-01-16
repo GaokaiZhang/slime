@@ -526,3 +526,61 @@ def compute_response_log_probs(
     token_log_probs = log_probs.gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
 
     return token_log_probs
+
+
+# ==============================================================================
+# SWE-bench Container Management (for mini-swe-agent-plus)
+# ==============================================================================
+
+def setup_swebench_container(
+    instance_id: str,
+    suffix: str = "",
+    timeout: int = 300,
+) -> tuple[str, str]:
+    """
+    Setup a Docker container for running mini-swe-agent-plus on a SWE-bench instance.
+
+    Args:
+        instance_id: SWE-bench instance ID (e.g., "django__django-12345")
+        suffix: Suffix for container name uniqueness
+        timeout: Timeout for container operations
+
+    Returns:
+        Tuple of (container_name, repo_path) where repo_path is /testbed
+    """
+    from swebench_utils import setup_container
+
+    try:
+        container_name = setup_container(instance_id, suffix=suffix, timeout=timeout)
+        repo_path = "/testbed"  # Standard swebench repo location
+        return container_name, repo_path
+    except Exception as e:
+        logger.error(f"Failed to setup container for {instance_id}: {e}")
+        return None, None
+
+
+def cleanup_container(container_name: str) -> None:
+    """Clean up a swebench Docker container."""
+    from swebench_utils import cleanup_container as _cleanup
+    if container_name:
+        _cleanup(container_name)
+
+
+def exec_in_swebench_container(
+    container_name: str,
+    command: str,
+    timeout: int = 60,
+) -> tuple[str, int]:
+    """
+    Execute a command in a swebench container.
+
+    Args:
+        container_name: Docker container name
+        command: Command to execute
+        timeout: Command timeout
+
+    Returns:
+        Tuple of (output, return_code)
+    """
+    from swebench_utils import exec_in_container
+    return exec_in_container(container_name, command, timeout=timeout)

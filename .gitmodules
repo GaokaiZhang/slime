@@ -4,3 +4,7 @@
 [submodule "submodules/harbor"]
 	path = submodules/harbor
 	url = https://github.com/GaokaiZhang/harbor.git
+[submodule "submodules/mini-swe-agent-plus"]
+	path = submodules/mini-swe-agent-plus
+	url = https://github.com/GaokaiZhang/mini-swe-agent-plus.git
+	branch = modal
