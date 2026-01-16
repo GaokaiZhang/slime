@@ -15,17 +15,17 @@ Architecture:
 
 Usage:
     # Deploy vLLM server first
-    modal deploy examples/harbor/modal_vllm.py
+    modal deploy examples/grpo/modal_vllm.py
 
     # Run training with swebench evaluation
-    export VLLM_URL="https://susvibes-mitigation--harbor-grpo-vllm-serve-vllm.modal.run"
-    python examples/harbor/local_grpo_trainer.py \
+    export VLLM_URL="https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"
+    python examples/grpo/local_grpo_trainer.py \
         --num-rollouts 50 \
         --n-samples 4 \
         --use-swebench-eval
 
     # For testing without Docker (heuristic rewards only)
-    python examples/harbor/local_grpo_trainer.py \
+    python examples/grpo/local_grpo_trainer.py \
         --num-rollouts 10 \
         --n-samples 4
 """
@@ -537,7 +537,7 @@ class LocalGRPOTrainer:
             logger.info(f"vLLM server status: {resp.json()}")
         except Exception as e:
             logger.error(f"Cannot connect to vLLM server: {e}")
-            logger.error(f"Please deploy vLLM first: modal deploy examples/harbor/modal_vllm.py")
+            logger.error(f"Please deploy vLLM first: modal deploy examples/grpo/modal_vllm.py")
             return
 
         # Load data

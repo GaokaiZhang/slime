@@ -10,11 +10,11 @@ This script:
 
 Usage:
     # First deploy vLLM server
-    modal deploy examples/harbor/modal_vllm.py
+    modal deploy examples/grpo/modal_vllm.py
 
     # Run training
-    export VLLM_URL="https://susvibes-mitigation--harbor-grpo-vllm-serve-vllm.modal.run"
-    python examples/harbor/run_grpo_training.py --num-rollouts 10 --test
+    export VLLM_URL="https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"
+    python examples/grpo/run_grpo_training.py --num-rollouts 10 --test
 """
 
 import argparse
@@ -40,9 +40,9 @@ logger = logging.getLogger(__name__)
 
 async def run_training(args):
     """Run GRPO training."""
-    from examples.harbor.data_source import DjangoTrainDataSource, DjangoTestDataSource
-    from examples.harbor.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
-    from examples.harbor.rollout import evaluate_with_harbor
+    from examples.grpo.data_source import DjangoTrainDataSource, DjangoTestDataSource
+    from examples.grpo.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
+    from examples.grpo.rollout import evaluate_with_harbor
 
     # Check vLLM URL
     vllm_url = args.vllm_url
@@ -156,8 +156,8 @@ async def run_training(args):
 
 async def run_evaluation(args):
     """Run evaluation on test instances."""
-    from examples.harbor.data_source import DjangoTestDataSource
-    from examples.harbor.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
+    from examples.grpo.data_source import DjangoTestDataSource
+    from examples.grpo.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
 
     vllm_url = args.vllm_url
     model_name = args.model_name
@@ -245,7 +245,7 @@ async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="GRPO Training for SWE-bench")
     parser.add_argument("--vllm-url", type=str,
-                       default=os.environ.get("VLLM_URL", "https://susvibes-mitigation--harbor-grpo-vllm-serve-vllm.modal.run"))
+                       default=os.environ.get("VLLM_URL", "https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"))
     parser.add_argument("--model-name", type=str,
                        default=os.environ.get("MODEL_NAME", "Kwai-Klear/Klear-AgentForge-8B-SFT"))
     parser.add_argument("--num-rollouts", type=int, default=10)

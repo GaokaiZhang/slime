@@ -9,8 +9,8 @@ This script tests the full pipeline:
 4. Verify SLiME data format
 
 Run with:
-    export VLLM_URL="https://susvibes-mitigation--harbor-grpo-vllm-serve-vllm.modal.run"
-    python examples/harbor/test_grpo_rollout.py
+    export VLLM_URL="https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"
+    python examples/grpo/test_grpo_rollout.py
 """
 
 import asyncio
@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 
 async def test_single_rollout():
     """Test a single GRPO rollout with evaluation."""
-    from examples.harbor.data_source import DjangoTrainDataSource
-    from examples.harbor.rollout import generate
+    from examples.grpo.data_source import DjangoTrainDataSource
+    from examples.grpo.rollout import generate
     from slime.utils.types import Sample
 
     print("=" * 70)
@@ -185,8 +185,8 @@ async def test_single_rollout():
 
 async def test_multiple_rollouts(n_samples: int = 3):
     """Test multiple rollouts (group) for GRPO."""
-    from examples.harbor.data_source import DjangoTrainDataSource
-    from examples.harbor.rollout import generate_group
+    from examples.grpo.data_source import DjangoTrainDataSource
+    from examples.grpo.rollout import generate_group
     from slime.utils.types import Sample
 
     print()

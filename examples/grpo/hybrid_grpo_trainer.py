@@ -21,7 +21,7 @@ Uses IDENTICAL GRPO implementation as local_gpu_grpo_trainer.py via grpo_core.py
 
 Usage:
     # Run training (this script runs locally, calls Modal for GPU work)
-    python examples/harbor/hybrid_grpo_trainer.py \
+    python examples/grpo/hybrid_grpo_trainer.py \
         --num-rollouts 50 \
         --n-samples 4
 """
@@ -47,7 +47,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Modal app
-app = modal.App("harbor-hybrid-grpo")
+app = modal.App("slime-grpo")
 
 # Modal image with training dependencies (including SLiME for ppo_utils)
 train_image = (
@@ -68,8 +68,8 @@ train_image = (
 )
 
 # Volumes for caching
-model_cache = modal.Volume.from_name("harbor-hybrid-cache", create_if_missing=True)
-output_volume = modal.Volume.from_name("harbor-hybrid-outputs", create_if_missing=True)
+model_cache = modal.Volume.from_name("slime-grpo-cache", create_if_missing=True)
+output_volume = modal.Volume.from_name("slime-grpo-outputs", create_if_missing=True)
 
 # Mount local grpo_core.py to Modal (avoid code duplication)
 local_code_mount = modal.Mount.from_local_file(

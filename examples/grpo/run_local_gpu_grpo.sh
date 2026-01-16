@@ -12,13 +12,13 @@
 #
 # Usage:
 #   # Quick test (5 instances, 2 samples each)
-#   bash examples/harbor/run_local_gpu_grpo.sh --test
+#   bash examples/grpo/run_local_gpu_grpo.sh --test
 #
 #   # Full training (50 instances, 4 samples each)
-#   bash examples/harbor/run_local_gpu_grpo.sh
+#   bash examples/grpo/run_local_gpu_grpo.sh
 #
 #   # Custom run
-#   bash examples/harbor/run_local_gpu_grpo.sh --num-rollouts 100 --n-samples 5
+#   bash examples/grpo/run_local_gpu_grpo.sh --num-rollouts 100 --n-samples 5
 
 set -e
 
@@ -180,7 +180,7 @@ echo ""
 echo "Starting training..."
 echo ""
 
-python examples/harbor/local_gpu_grpo_trainer.py \
+python examples/grpo/local_gpu_grpo_trainer.py \
     --model-name "$MODEL_NAME" \
     --num-rollouts "$NUM_ROLLOUTS" \
     --n-samples "$N_SAMPLES" \

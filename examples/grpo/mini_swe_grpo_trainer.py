@@ -13,10 +13,10 @@ Architecture:
 
 Usage:
     # First deploy vLLM on Modal
-    modal deploy examples/harbor/modal_vllm.py
+    modal deploy examples/grpo/modal_vllm.py
 
     # Run training
-    python examples/harbor/mini_swe_grpo_trainer.py \
+    python examples/grpo/mini_swe_grpo_trainer.py \
         --num-rollouts 50 \
         --n-samples 2 \
         --vllm-url https://your-modal-vllm-endpoint.modal.run

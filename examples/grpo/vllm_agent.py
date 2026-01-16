@@ -381,7 +381,7 @@ def start_docker_container(
 
     Returns container ID if successful, None otherwise.
     """
-    from examples.harbor.swebench_utils import get_docker_image
+    from examples.grpo.swebench_utils import get_docker_image
 
     if image is None:
         image = get_docker_image(instance_id)

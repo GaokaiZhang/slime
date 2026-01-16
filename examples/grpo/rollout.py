@@ -273,7 +273,7 @@ async def generate(
     Generate SWE-bench solution.
 
     This is the main rollout function called by SLiME.
-    Path: examples.harbor.rollout:generate
+    Path: examples.grpo.rollout:generate
 
     Uses direct vLLM agent for proper token_ids and logprobs collection.
     """

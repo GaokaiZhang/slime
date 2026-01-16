@@ -8,10 +8,10 @@ This script deploys a full training job on Modal with:
 
 Usage:
     # Deploy vLLM server first
-    modal deploy examples/harbor/modal_vllm.py
+    modal deploy examples/grpo/modal_vllm.py
 
     # Run training
-    modal run examples/harbor/modal_train.py --num-rollouts 10
+    modal run examples/grpo/modal_train.py --num-rollouts 10
 """
 
 import modal

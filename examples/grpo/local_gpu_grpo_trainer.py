@@ -25,13 +25,13 @@ Usage:
         --port 8000 --dtype bfloat16
 
     # Then run training:
-    python examples/harbor/local_gpu_grpo_trainer.py \
+    python examples/grpo/local_gpu_grpo_trainer.py \
         --num-rollouts 50 \
         --n-samples 4 \
         --vllm-url http://localhost:8000
 
     # Option 2: Use HuggingFace generate (slower but no vLLM needed)
-    python examples/harbor/local_gpu_grpo_trainer.py \
+    python examples/grpo/local_gpu_grpo_trainer.py \
         --num-rollouts 50 \
         --n-samples 4 \
         --use-hf-generate

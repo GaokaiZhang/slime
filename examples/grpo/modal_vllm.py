@@ -12,7 +12,7 @@ import threading
 import time
 
 # Modal app
-app = modal.App("harbor-grpo-vllm")
+app = modal.App("slime-grpo-vllm")
 
 # Configuration
 DEFAULT_MODEL_NAME = "Kwai-Klear/Klear-AgentForge-8B-SFT"
@@ -34,7 +34,7 @@ image = (
 )
 
 # Volume for caching model weights
-model_cache = modal.Volume.from_name("harbor-grpo-cache", create_if_missing=True)
+model_cache = modal.Volume.from_name("slime-grpo-cache", create_if_missing=True)
 
 # HuggingFace token secret
 hf_secret = modal.Secret.from_name("hf-token-swe")
@@ -248,6 +248,6 @@ def main(action: str = "info"):
         print(f"  Model: {config['model_name']}")
         print(f"  Max model len: {config['max_model_len']}")
         print("\nTo deploy the server, run:")
-        print("  modal deploy examples/harbor/modal_vllm.py")
+        print("  modal deploy examples/grpo/modal_vllm.py")
         print("\nTo serve temporarily, run:")
-        print("  modal serve examples/harbor/modal_vllm.py")
+        print("  modal serve examples/grpo/modal_vllm.py")

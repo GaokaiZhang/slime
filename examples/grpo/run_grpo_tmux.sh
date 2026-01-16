@@ -13,7 +13,7 @@
 # Usage:
 #   tmux new -s grpo
 #   conda activate hb_train
-#   bash examples/harbor/run_grpo_tmux.sh
+#   bash examples/grpo/run_grpo_tmux.sh
 #
 # To monitor in another terminal:
 #   tmux attach -t grpo
@@ -115,7 +115,7 @@ deploy_modal() {
 
     # Deploy the Modal app
     cd "$(dirname "$0")/../.."  # Go to slime root
-    modal deploy examples/harbor/modal_vllm.py
+    modal deploy examples/grpo/modal_vllm.py
 
     # Get the URL
     log "Waiting for Modal app to be ready..."

@@ -33,7 +33,7 @@ def test_data_source():
     """Test loading SWE-bench data."""
     logger.info("Testing data source...")
 
-    from examples.harbor.data_source import DjangoTrainDataSource
+    from examples.grpo.data_source import DjangoTrainDataSource
 
     ds = DjangoTrainDataSource(limit=3)
     logger.info(f"Loaded {len(ds)} instances")
@@ -52,7 +52,7 @@ def test_vllm_agent_module():
     logger.info("Testing vLLM agent module...")
 
     try:
-        from examples.harbor.vllm_agent import (
+        from examples.grpo.vllm_agent import (
             VLLMAgentConfig,
             run_agent,
             call_vllm,
@@ -98,7 +98,7 @@ def test_loss_mask_computation():
     """Test loss mask computation from rollout details."""
     logger.info("Testing loss mask computation...")
 
-    from examples.harbor.rollout import compute_loss_mask_from_rollout_details
+    from examples.grpo.rollout import compute_loss_mask_from_rollout_details
 
     # Mock rollout details (like vLLM agent produces)
     rollout_details = [
@@ -140,7 +140,7 @@ def test_swebench_utils():
     logger.info("Testing SWE-bench utilities...")
 
     try:
-        from examples.harbor.swebench_utils import (
+        from examples.grpo.swebench_utils import (
             get_docker_image,
             get_instance_info,
         )
@@ -180,7 +180,7 @@ def test_vllm_connection():
 
     except requests.exceptions.ConnectionError:
         logger.warning(f"  Could not connect to vLLM at {vllm_url}")
-        logger.info("  Deploy vLLM with: modal deploy examples/harbor/modal_vllm.py")
+        logger.info("  Deploy vLLM with: modal deploy examples/grpo/modal_vllm.py")
         return False
 
 
@@ -188,7 +188,7 @@ def test_vllm_api_call():
     """Test a single vLLM API call with logprobs and token IDs."""
     logger.info("Testing vLLM API call with logprobs and tokenizer fallback...")
 
-    from examples.harbor.vllm_agent import call_vllm, get_tokenizer
+    from examples.grpo.vllm_agent import call_vllm, get_tokenizer
 
     vllm_url = os.environ.get("VLLM_URL", "http://localhost:8000")
     model = os.environ.get("MODEL_NAME", "Qwen/Qwen3-Coder-30B-A3B-Instruct")
@@ -316,8 +316,8 @@ async def test_full_rollout():
     """Test a complete rollout (requires Docker + vLLM)."""
     logger.info("Testing full rollout (requires Docker + vLLM)...")
 
-    from examples.harbor.data_source import DjangoTrainDataSource
-    from examples.harbor.rollout import generate
+    from examples.grpo.data_source import DjangoTrainDataSource
+    from examples.grpo.rollout import generate
 
     # Load one sample
     ds = DjangoTrainDataSource(limit=1)

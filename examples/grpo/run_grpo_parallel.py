@@ -9,11 +9,11 @@ Improvements over run_grpo_training.py:
 
 Usage:
     # Deploy vLLM server first
-    modal deploy examples/harbor/modal_vllm.py
+    modal deploy examples/grpo/modal_vllm.py
 
     # Run parallel training with swebench evaluation
-    export VLLM_URL="https://susvibes-mitigation--harbor-grpo-vllm-serve-vllm.modal.run"
-    python examples/harbor/run_grpo_parallel.py \
+    export VLLM_URL="https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"
+    python examples/grpo/run_grpo_parallel.py \
         --num-rollouts 10 \
         --n-samples-per-prompt 5 \
         --max-workers 4 \
@@ -60,8 +60,8 @@ def run_single_sample(
 
     This function is designed to be called in parallel.
     """
-    from examples.harbor.vllm_agent import VLLMAgentConfig, run_agent
-    from examples.harbor.swebench_utils import get_docker_image
+    from examples.grpo.vllm_agent import VLLMAgentConfig, run_agent
+    from examples.grpo.swebench_utils import get_docker_image
 
     agent_config = VLLMAgentConfig(
         api_url=config["vllm_url"],
@@ -266,8 +266,8 @@ def run_parallel_samples(
 
 async def run_training(args):
     """Run parallel GRPO training."""
-    from examples.harbor.data_source import DjangoTrainDataSource, DjangoTestDataSource
-    from examples.harbor.vllm_agent import get_tokenizer
+    from examples.grpo.data_source import DjangoTrainDataSource, DjangoTestDataSource
+    from examples.grpo.vllm_agent import get_tokenizer
 
     config = {
         "vllm_url": args.vllm_url,
@@ -375,8 +375,8 @@ async def run_training(args):
 
 async def run_evaluation(args):
     """Run evaluation on test instances."""
-    from examples.harbor.data_source import DjangoTestDataSource
-    from examples.harbor.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
+    from examples.grpo.data_source import DjangoTestDataSource
+    from examples.grpo.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
 
     config = {
         "vllm_url": args.vllm_url,
@@ -450,7 +450,7 @@ async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Parallel GRPO Training for SWE-bench")
     parser.add_argument("--vllm-url", type=str,
-                       default=os.environ.get("VLLM_URL", "https://susvibes-mitigation--harbor-grpo-vllm-serve-vllm.modal.run"))
+                       default=os.environ.get("VLLM_URL", "https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"))
     parser.add_argument("--model-name", type=str,
                        default=os.environ.get("MODEL_NAME", "Kwai-Klear/Klear-AgentForge-8B-SFT"))
     parser.add_argument("--num-rollouts", type=int, default=10,

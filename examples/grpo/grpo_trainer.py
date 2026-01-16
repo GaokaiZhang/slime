@@ -240,8 +240,8 @@ class GRPOTrainer:
 
         Returns groups of samples (n_samples_per_prompt per prompt).
         """
-        from examples.harbor.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
-        from examples.harbor.rollout import evaluate_with_harbor
+        from examples.grpo.vllm_agent import VLLMAgentConfig, run_agent, get_tokenizer
+        from examples.grpo.rollout import evaluate_with_harbor
 
         vllm_tokenizer = get_tokenizer(self.config.model_name)
 
@@ -443,7 +443,7 @@ class GRPOTrainer:
 
     async def train(self):
         """Main training loop."""
-        from examples.harbor.data_source import DjangoTrainDataSource, BUG_SOLVING_PROMPT
+        from examples.grpo.data_source import DjangoTrainDataSource, BUG_SOLVING_PROMPT
 
         logger.info("=" * 60)
         logger.info("GRPO Training")
