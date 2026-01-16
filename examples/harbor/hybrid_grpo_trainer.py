@@ -36,9 +36,9 @@ from pathlib import Path
 
 import modal
 
-# NOTE: grpo_core imports are done inside run_hybrid_training()
-# because Modal functions don't have access to local files.
-# Modal functions use SLiME's ppo_utils.py directly.
+# NOTE: grpo_core.py is mounted to Modal via local_code_mount.
+# This ensures NO code duplication between local and Modal scripts.
+# Modal functions use the same grpo_core.extract_patch and SLiME's ppo_utils.py.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +71,12 @@ train_image = (
 model_cache = modal.Volume.from_name("harbor-hybrid-cache", create_if_missing=True)
 output_volume = modal.Volume.from_name("harbor-hybrid-outputs", create_if_missing=True)
 
+# Mount local grpo_core.py to Modal (avoid code duplication)
+local_code_mount = modal.Mount.from_local_file(
+    local_path=Path(__file__).parent / "grpo_core.py",
+    remote_path="/root/grpo_core.py",
+)
+
 # Secrets
 hf_secret = modal.Secret.from_name("hf-token-swe")
 
@@ -84,6 +90,7 @@ hf_secret = modal.Secret.from_name("hf-token-swe")
         "/root/.cache/huggingface": model_cache,
         "/outputs": output_volume,
     },
+    mounts=[local_code_mount],
 )
 def generate_samples_on_modal(
     instance_data: dict,
@@ -101,7 +108,10 @@ def generate_samples_on_modal(
     Returns:
         List of {"response": str, "patch": str, "token_ids": list, "logprobs": list}
     """
-    import re
+    import sys
+    sys.path.insert(0, "/root")
+    from grpo_core import extract_patch  # Use shared implementation (no duplication)
+
     import torch
     import torch.nn.functional as F
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -161,26 +171,6 @@ def generate_samples_on_modal(
     ).to(device)
     prompt_length = inputs["input_ids"].shape[1]
 
-    # Local extract_patch function (grpo_core not available on Modal)
-    def _extract_patch(response: str) -> str:
-        diff_pattern = r'```(?:diff)?\n((?:---|\+\+\+|@@|[-+ ].*\n?)+)```'
-        match = re.search(diff_pattern, response, re.MULTILINE)
-        if match:
-            return match.group(1).strip()
-        lines = response.split('\n')
-        diff_lines = []
-        in_diff = False
-        for line in lines:
-            if line.startswith('--- ') or line.startswith('+++ ') or line.startswith('@@'):
-                in_diff = True
-            if in_diff:
-                diff_lines.append(line)
-                if not line.strip() and len(diff_lines) > 5:
-                    break
-        if diff_lines:
-            return '\n'.join(diff_lines)
-        return ""
-
     samples = []
     for i in range(n_samples):
         with torch.no_grad():
@@ -206,8 +196,8 @@ def generate_samples_on_modal(
                 token_id = response_ids[j].item()
                 logprobs.append(probs[token_id].item())
 
-        # Extract patch
-        patch = _extract_patch(response_text)
+        # Extract patch (using shared grpo_core.extract_patch)
+        patch = extract_patch(response_text)
 
         samples.append({
             "response": response_text,
@@ -230,6 +220,7 @@ def generate_samples_on_modal(
         "/root/.cache/huggingface": model_cache,
         "/outputs": output_volume,
     },
+    mounts=[local_code_mount],
 )
 def train_step_on_modal(
     prompt: str,

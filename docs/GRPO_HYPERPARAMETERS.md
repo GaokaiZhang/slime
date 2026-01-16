@@ -18,7 +18,7 @@ This document provides a detailed comparison of our GRPO implementation against 
 
 ## 2. KL Divergence Implementation
 
-### Our Implementation (`grpo_trainer.py`, `modal_grpo_trainer.py`)
+### Our Implementation (`grpo_core.py`)
 ```python
 # Low-variance KL from Search-R1
 ratio = torch.exp(log_probs_policy - log_probs_ref)
@@ -214,16 +214,16 @@ class Sample:
 
 ## 9. Reward Functions
 
-**We use swebench.harness ONLY - no heuristics.**
+**We use swebench.harness ONLY - no heuristics, no fallbacks.**
 
 | Script | Reward Function | Docker Required |
 |--------|----------------|-----------------|
 | `local_gpu_grpo_trainer.py` | swebench.harness | ✅ Yes |
+| `hybrid_grpo_trainer.py` | swebench.harness | ✅ Yes (local Docker) |
 | `local_grpo_trainer.py` | swebench.harness | ✅ Yes |
-| `modal_grpo_trainer.py` | ⚠️ Heuristic (deprecated) | ❌ |
 
-**Note**: Modal cannot easily run Docker containers, so Modal-based training uses heuristic rewards.
-For accurate training, use `local_gpu_grpo_trainer.py` with local GPU + Docker.
+**Note**: Both recommended trainers (`local_gpu_grpo_trainer.py` and `hybrid_grpo_trainer.py`) use
+`grpo_core.evaluate_with_swebench()` which runs swebench.harness locally via Docker.
 
 ## 10. Summary: Our Implementation Status
 
