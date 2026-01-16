@@ -1,6 +1,8 @@
 # GRPO Training for SWE-bench
 
-Multi-turn agent GRPO training using mini-swe-agent-plus with swebench.harness evaluation.
+Multi-turn agent GRPO training using **mini-swe-agent-plus** with swebench.harness evaluation.
+
+**Agent Framework:** [mini-swe-agent-plus](https://github.com/GaokaiZhang/mini-swe-agent-plus) (modal branch)
 
 ## Quick Start
 
@@ -79,11 +81,13 @@ loss = policy_loss + 0.001 * kl_loss
 
 | File | Description |
 |------|-------------|
-| `mini_swe_grpo_trainer.py` | Main training script (recommended) |
-| `grpo_agent.py` | GRPO-compatible agent with token capture |
+| `mini_swe_grpo_trainer.py` | Main training script using mini-swe-agent-plus |
+| `grpo_agent.py` | GRPO-compatible wrapper for mini-swe-agent-plus |
 | `grpo_core.py` | Shared GRPO implementation (SLiME ppo_utils) |
 | `modal_vllm.py` | Modal vLLM deployment |
 | `swebench_utils.py` | Docker container management |
+
+**Submodule:** `submodules/mini-swe-agent-plus/` (multi-turn agent with bash + edit tools)
 
 ## Agent Config
 
