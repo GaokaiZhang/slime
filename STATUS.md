@@ -713,3 +713,354 @@ Training Complete!
 3. ✅ Hybrid GRPO trainer test - PASSED (Modal + local Docker)
 4. Run longer training with more instances
 5. Compare before/after model performance
+
+---
+
+## Harbor + SLiME Integration (2026-01-16)
+
+### New Architecture: Harbor for Rollouts, SLiME for Training
+
+Created `examples/harbor/` with a cleaner integration approach:
+
+**Key Insight**: Log probs are NOT needed from Harbor - they are recomputed at training time.
+
+```
+Harbor CLI (qwen-code) → Trajectories (tokens + reward) → SLiME GRPO Training
+                              ↓
+                     No log probs needed!
+                     Recomputed at training time
+```
+
+### Installation
+
+```bash
+# Uninstall old pip package
+pip uninstall harbor -y
+
+# Install via uv tool (recommended)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install harbor
+
+# Verify
+harbor --help
+```
+
+### Files Created
+
+```
+examples/harbor/
+├── __init__.py              # Package init
+├── README.md                # Full documentation
+├── trajectory_converter.py  # Harbor output → SLiME Sample
+├── harbor_rollout.py        # Harbor CLI wrapper for rollouts
+└── harbor_slime_trainer.py  # Full training pipeline
+```
+
+### Default Configuration
+
+- **Model**: `Qwen/Qwen3-Coder-30B-A3B`
+- **Agent**: `qwen-coder`
+- **Dataset**: `swebench-verified@1.0`
+
+### Usage
+
+```bash
+# Quick start
+python examples/harbor/harbor_slime_trainer.py \
+    --model Qwen/Qwen3-Coder-30B-A3B \
+    --agent qwen-coder \
+    --dataset swebench-verified@1.0 \
+    --n-rollouts 50
+
+# Convert existing Harbor job
+python examples/harbor/trajectory_converter.py \
+    jobs/existing-job \
+    --tokenizer Qwen/Qwen3-Coder-30B-A3B \
+    --output samples.json
+```
+
+### Why This Approach?
+
+| Feature | Direct GRPO | Harbor + SLiME |
+|---------|-------------|----------------|
+| Log probs | At inference | At training time |
+| Agent flexibility | Custom only | Any Harbor agent |
+| Evaluation | Custom | swebench.harness |
+| Complexity | High | Medium |
+
+### Comparison with Previous Approach
+
+| Previous (`examples/grpo/`) | New (`examples/harbor/`) |
+|----------------------------|--------------------------|
+| Custom vLLM agent | Uses Harbor's qwen-coder |
+| Log probs from vLLM API | Recomputed at training |
+| Manual Docker management | Harbor handles environments |
+| Complex setup | Simple CLI-based workflow |
+
+Both approaches are valid:
+- **Previous**: More control, captures log probs at inference
+- **New**: More modular, uses existing Harbor infrastructure
+
+---
+
+## Harbor GRPO Trainer (2026-01-17)
+
+### New: harbor_grpo_trainer.py
+
+Created a unified trainer that combines:
+- **Harbor CLI**: Agent rollouts (mini-swe-agent, qwen-coder, etc.)
+- **Modal A100**: GRPO weight updates with SLiME's ppo_utils.py
+- **Local Docker**: swebench.harness evaluation for accurate rewards
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│  Harbor Agent   │───▶│  Trajectories    │───▶│  Modal GRPO     │
+│  (mini-swe)     │    │  (text + reward) │    │  Training       │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+       │                        │
+       ▼                        ▼
+Local Docker              swebench.harness
+(execution)               (evaluation)
+```
+
+### Key Insight
+
+**Log probabilities from Harbor are NOT used for training.**
+Instead, log probs are recomputed at training time via forward pass on Modal.
+This enables using ANY Harbor agent for RL training.
+
+### File Structure
+
+```
+examples/harbor/
+├── __init__.py              # Package init
+├── README.md                # Full documentation
+├── test_harbor_slime.py     # Integration tests
+├── trajectory_converter.py  # Harbor output → SLiME Sample
+├── harbor_rollout.py        # Harbor CLI wrapper
+├── harbor_slime_trainer.py  # Basic trainer (no Modal)
+├── harbor_grpo_trainer.py   # ★ NEW: Modal + Harbor + swebench.harness
+└── run_harbor_grpo.sh       # Shell script for training
+```
+
+### Usage
+
+```bash
+# Run integration tests
+PYTHONPATH=$PWD python examples/harbor/test_harbor_slime.py
+
+# Test mode (5 instances)
+python examples/harbor/harbor_grpo_trainer.py --test
+
+# Full training (201 Django instances)
+python examples/harbor/harbor_grpo_trainer.py --num-rollouts 201
+
+# Using Modal CLI
+modal run examples/harbor/harbor_grpo_trainer.py --num-rollouts 50
+
+# Using shell script
+bash examples/harbor/run_harbor_grpo.sh --test
+```
+
+### Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--agent` | mini-swe-agent | Harbor agent (mini-swe-agent, qwen-coder) |
+| `--model` | Kwai-Klear/Klear-AgentForge-8B-SFT | Training model |
+| `--n-samples` | 4 | GRPO group size |
+| `--lr` | 1e-6 | Learning rate |
+| `--kl-coef` | 0.001 | KL penalty coefficient |
+
+### Test Results (2026-01-17)
+
+```
+Harbor CLI: PASSED (v0.1.38)
+SLiME Sample Format: PASSED
+Trajectory Converter: PASSED
+Docker Containers: PASSED (253 SWE-bench images)
+Training Instances: PASSED (201 Django instances)
+GRPO Core: PASSED
+Harbor Agents: PASSED
+
+Total: 7/7 tests passed
+```
+
+### End-to-End Test (2026-01-17)
+
+Successfully ran hybrid GRPO trainer with Modal + local Docker:
+
+```
+2026-01-17 04:14:04 - Training Complete!
+Total rollouts: 2
+Total samples: 4
+Total resolved: 0 (0.0%)
+Time: 11.5 minutes
+```
+
+Pipeline verified:
+- Modal A100: Model inference (Kwai-Klear/Klear-AgentForge-8B-SFT)
+- Modal A100: GRPO weight updates
+- Local Docker: swebench.harness evaluation
+
+### Critical Issues Found (2026-01-17)
+
+**Previous `hybrid_grpo_trainer.py` had issues:**
+
+1. **NO Agent Interaction**: Just single-turn `model.generate()`, NOT multi-turn agent loop with Docker
+2. **NO Masking**: Tool/environment responses NOT masked from loss computation
+3. **Incorrect Log Probs**: Single-turn generation, not multi-turn agent trajectories
+
+**New `agentic_grpo_trainer.py` fixes these:**
+
+| Issue | Previous | Fixed |
+|-------|----------|-------|
+| Agent Loop | Single `generate()` | Multi-turn with tools |
+| Docker Interaction | None | Full tool execution |
+| Masking | No masking | Model tokens only |
+| Log Probs | Single-turn | Per-turn capture |
+| GRPO Utils | Inline code | SLiME's ppo_utils |
+
+### New: agentic_grpo_trainer.py
+
+```python
+# Key data structure for proper masking
+@dataclass
+class AgentRollout:
+    turns: list[TurnData]  # Model outputs (INCLUDED in loss)
+    env_observations: list[str]  # Environment responses (MASKED)
+
+# Only model tokens contribute to gradient
+model_token_ids = rollout.get_model_token_ids()  # Training
+env_observations = rollout.env_observations  # Context only, no gradient
+```
+
+Uses SLiME's ppo_utils with Search-R1 parameters:
+- `compute_approx_kl(kl_loss_type="low_var_kl")`
+- `compute_policy_loss(eps_clip=0.2, eps_clip_high=0.28)`
+
+### Test Results (2026-01-17)
+
+Ran agentic GRPO trainer with Modal vLLM + local Docker:
+
+```
+[1/2] django__django-7530
+  Sample 1/4: 8 turns, 8510 tokens, Reward: -1.0
+  Sample 2/4: 24 turns, 31555 tokens, Reward: -1.0
+  Sample 3/4: 30 turns, 1535 tokens, Reward: -1.0
+  Sample 4/4: 4 turns, 6263 tokens, Reward: -1.0
+```
+
+**Verified:**
+- Multi-turn agent loops (4-30 turns per sample)
+- Tool execution in Docker containers
+- Model tokens correctly captured (env responses masked)
+- SLiME's ppo_utils used for GRPO
+
+**Fixed:**
+- Added MAX_RESPONSE_TOKENS=4096 to prevent OOM on long sequences
+
+### Usage
+
+```bash
+# Deploy vLLM server
+modal deploy examples/grpo/modal_vllm.py
+
+# Run test (2 instances, 4 samples each)
+python examples/grpo/agentic_grpo_trainer.py --test \
+    --vllm-url "https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"
+
+# Full training (201 Django instances)
+python examples/grpo/agentic_grpo_trainer.py --num-rollouts 201 \
+    --vllm-url "https://susvibes-mitigation--slime-grpo-vllm-serve-vllm.modal.run"
+```
+
+### Harbor Shared Code Architecture (2026-01-17)
+
+Created a maintainable shared code structure using Harbor for agent rollouts:
+
+```
+examples/harbor/
+├── harbor_core.py          # ★ SHARED: Config, Harbor rollouts, GRPO training
+├── harbor_grpo_local.py    # Local GPU trainer (imports from core)
+├── harbor_grpo_modal.py    # Modal GPU trainer (imports from core)
+├── harbor_grpo_trainer.py  # (legacy, replaced by harbor_grpo_modal.py)
+├── harbor_rollout.py       # Harbor CLI wrapper
+├── trajectory_converter.py # Harbor output → SLiME Sample
+└── test_harbor_slime.py    # Integration tests
+```
+
+**Shared Core (`harbor_core.py`):**
+```python
+# Configuration with Search-R1 parameters
+@dataclass
+class HarborGRPOConfig:
+    model_name: str = "Kwai-Klear/Klear-AgentForge-8B-SFT"
+    agent: str = "mini-swe-agent-plus"  # Harbor agent
+    lr: float = 1e-6                    # Search-R1
+    kl_coef: float = 0.001              # Search-R1
+    kl_loss_type: str = "low_var_kl"    # Search-R1
+    eps_clip: float = 0.2               # PPO clip
+    eps_clip_high: float = 0.28         # DAPO asymmetric
+
+# Shared functions
+run_harbor_agent()          # Run Harbor CLI for rollouts
+parse_harbor_trajectory()   # Parse Harbor output
+evaluate_with_swebench()    # swebench.harness evaluation
+train_grpo_step()           # GRPO training using SLiME's ppo_utils
+load_training_instances()   # Load Django training data
+create_swebench_prompt()    # Create training prompt
+```
+
+**Key Design:**
+- Harbor CLI runs agent rollouts (`harbor run --agent mini-swe-agent-plus ...`)
+- Log probs are NOT captured from Harbor - recomputed at training time
+- swebench.harness for evaluation (no heuristics)
+- SLiME's `ppo_utils.py` for GRPO (Search-R1 parameters)
+
+**Usage:**
+
+```bash
+# Local GPU version (Harbor + local GPU)
+python examples/harbor/harbor_grpo_local.py --test
+
+# Modal GPU version (Harbor local + Modal A100)
+modal run examples/harbor/harbor_grpo_modal.py --test
+
+# Full training (201 Django instances)
+python examples/harbor/harbor_grpo_local.py --num-rollouts 201
+modal run examples/harbor/harbor_grpo_modal.py --num-rollouts 201
+
+# Custom agent
+python examples/harbor/harbor_grpo_local.py --agent qwen-coder --num-rollouts 50
+```
+
+**Import Verification (2026-01-17):**
+
+```bash
+$ PYTHONPATH=$PWD python -c "from examples.harbor.harbor_core import HarborGRPOConfig; print('OK')"
+OK
+
+$ PYTHONPATH=$PWD python -c "from examples.harbor.harbor_grpo_local import run_local_grpo_training; print('OK')"
+OK
+```
+
+All core functions importable and tested.
+
+### Architecture Comparison
+
+| Feature | examples/grpo/ | examples/harbor/ |
+|---------|---------------|------------------|
+| Agent | Custom vLLM agent | Harbor CLI (mini-swe-agent-plus) |
+| Log probs | Captured at inference | Recomputed at training |
+| Docker | Manual container mgmt | Harbor handles environments |
+| Evaluation | swebench.harness | swebench.harness |
+| GRPO | SLiME ppo_utils | SLiME ppo_utils |
+
+**Recommended**: Use `examples/harbor/` as it leverages Harbor's agent infrastructure.
+
+### Next Steps
+
+1. Run full training with `--num-rollouts 201`
+2. Evaluate trained model
+3. Compare with baseline

@@ -71,11 +71,8 @@ train_image = (
 model_cache = modal.Volume.from_name("slime-grpo-cache", create_if_missing=True)
 output_volume = modal.Volume.from_name("slime-grpo-outputs", create_if_missing=True)
 
-# Mount local grpo_core.py to Modal (avoid code duplication)
-local_code_mount = modal.Mount.from_local_file(
-    local_path=Path(__file__).parent / "grpo_core.py",
-    remote_path="/root/grpo_core.py",
-)
+# Note: We inline the extract_patch function in Modal functions
+# to avoid mount configuration issues with newer Modal versions
 
 # Secrets
 hf_secret = modal.Secret.from_name("hf-token-swe")
@@ -90,7 +87,6 @@ hf_secret = modal.Secret.from_name("hf-token-swe")
         "/root/.cache/huggingface": model_cache,
         "/outputs": output_volume,
     },
-    mounts=[local_code_mount],
 )
 def generate_samples_on_modal(
     instance_data: dict,
@@ -108,9 +104,32 @@ def generate_samples_on_modal(
     Returns:
         List of {"response": str, "patch": str, "token_ids": list, "logprobs": list}
     """
-    import sys
-    sys.path.insert(0, "/root")
-    from grpo_core import extract_patch  # Use shared implementation (no duplication)
+    import re
+
+    def extract_patch(response: str) -> str:
+        """Extract git diff patch from model response."""
+        # Pattern 1: Code fence with diff
+        diff_pattern = r'```(?:diff)?\n((?:---|\+\+\+|@@|[-+ ].*\n?)+)```'
+        match = re.search(diff_pattern, response, re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+
+        # Pattern 2: Raw diff
+        lines = response.split('\n')
+        diff_lines = []
+        in_diff = False
+
+        for line in lines:
+            if line.startswith('--- ') or line.startswith('+++ ') or line.startswith('@@'):
+                in_diff = True
+            if in_diff:
+                diff_lines.append(line)
+                if not line.strip() and len(diff_lines) > 5:
+                    break
+
+        if diff_lines:
+            return '\n'.join(diff_lines)
+        return ""
 
     import torch
     import torch.nn.functional as F
@@ -220,7 +239,6 @@ def generate_samples_on_modal(
         "/root/.cache/huggingface": model_cache,
         "/outputs": output_volume,
     },
-    mounts=[local_code_mount],
 )
 def train_step_on_modal(
     prompt: str,
