@@ -19,41 +19,65 @@ Train coding agents using **Harbor** for rollouts and **SLiME GRPO** for RL trai
 
 ---
 
-## Option 1: Local GPU Training
+## Prerequisites (All Users)
 
-**Requirements:**
-- Local GPU (24GB+ VRAM recommended)
-- Docker with SWE-bench images
-- Harbor CLI installed
-
-### Step 1: Install Dependencies
+### Step 1: Clone SLiME Repository
 
 ```bash
-# Activate slime environment
+git clone https://github.com/GaokaiZhang/slime.git
+cd slime
+git submodule update --init --recursive
+```
+
+### Step 2: Create Conda Environment
+
+```bash
+conda create -n slime python=3.11 -y
 conda activate slime
+```
+
+### Step 3: Install SLiME and Dependencies
+
+```bash
+# Install SLiME (required for ppo_utils)
+pip install -e .
+
+# Install training dependencies
+pip install torch transformers peft accelerate datasets huggingface_hub
 
 # Install Harbor CLI
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install harbor
 
-# Install Python dependencies
-pip install torch transformers peft accelerate datasets
-
-# Verify Harbor
+# Verify installations
+python -c "from slime.utils.ppo_utils import compute_policy_loss; print('SLiME OK')"
 harbor --help
 ```
 
-### Step 2: Verify Docker Images
+### Step 4: Setup Docker with SWE-bench Images
 
 ```bash
-# Check SWE-bench Docker images are available
-docker images | grep swe-bench | head -5
+# Verify Docker is running
+docker ps
+
+# Pull SWE-bench images (example for Django)
+docker pull ghcr.io/swe-bench/django__django:latest
+
+# Or pull all images (takes time and disk space)
+# See: https://github.com/princeton-nlp/SWE-bench
 ```
 
-### Step 3: Run Training
+---
+
+## Option 1: Local GPU Training
+
+**Additional Requirements:**
+- Local GPU (24GB+ VRAM recommended)
+
+### Run Training
 
 ```bash
-cd /home/gaokaizhang/slime
+cd slime
 
 # Test mode (5 instances, quick validation)
 python examples/harbor/harbor_grpo_local.py --test
@@ -86,45 +110,29 @@ Options:
 
 ## Option 2: Modal GPU Training
 
-**Requirements:**
-- Modal account and CLI configured
-- Docker with SWE-bench images (locally for evaluation)
-- Harbor CLI installed (locally for rollouts)
+**Additional Requirements:**
+- Modal account
 
-### Step 1: Setup Modal
+### Setup Modal (One-time)
 
 ```bash
 # Install Modal CLI
 pip install modal
 
-# Authenticate (one-time)
+# Authenticate
 modal setup
 
-# Verify workspace
+# Create HF token secret
+modal secret create hf-token-swe HF_TOKEN=your_huggingface_token
+
+# Verify
 modal profile list
 ```
 
-### Step 2: Create Modal Secret for HuggingFace
+### Run Training
 
 ```bash
-# Create HF token secret (one-time)
-modal secret create hf-token-swe HF_TOKEN=your_huggingface_token
-```
-
-### Step 3: Install Local Dependencies
-
-```bash
-# Harbor CLI for local rollouts
-uv tool install harbor
-
-# Verify
-harbor --help
-```
-
-### Step 4: Run Training
-
-```bash
-cd /home/gaokaizhang/slime
+cd slime
 
 # Test mode (5 instances)
 modal run examples/harbor/harbor_grpo_modal.py --test
