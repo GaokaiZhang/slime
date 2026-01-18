@@ -1,37 +1,33 @@
 #!/usr/bin/env python
 """
-Harbor GRPO Trainer - Local GPU Version
+Harbor GRPO Trainer - Local GPU
 
-This trainer runs on a local GPU with Harbor for agent rollouts.
-Uses shared code from harbor_core.py.
-
-Architecture:
-    ┌─────────────────────────────────────────────────────────────┐
-    │                      Local Machine                           │
-    │  ┌──────────────────┐    ┌──────────────────────────────┐   │
-    │  │ Harbor Agent     │    │ Training (this script)       │   │
-    │  │ (mini-swe-agent) │    │ - Model loading (GPU)        │   │
-    │  │                  │    │ - GRPO updates               │   │
-    │  └──────────────────┘    │ - Gradient computation       │   │
-    │           │              └──────────────────────────────┘   │
-    │           │                           │                     │
-    │           ▼                           ▼                     │
-    │  ┌──────────────────────────────────────────────────────┐   │
-    │  │              Docker Containers (local)                │   │
-    │  │  - Harbor agent tool execution                        │   │
-    │  │  - swebench.harness evaluation                        │   │
-    │  └──────────────────────────────────────────────────────┘   │
-    └─────────────────────────────────────────────────────────────┘
+Train any model with any Harbor agent using GRPO (Group Relative Policy Optimization).
+Supports both local Docker and Daytona cloud environments.
 
 Usage:
-    # Test mode (5 instances)
-    python examples/harbor/harbor_grpo_local.py --test
+    # Local Docker (default)
+    python examples/harbor/harbor_grpo_local.py \
+        --model Qwen/Qwen2.5-Coder-7B-Instruct \
+        --agent qwen-coder \
+        --num-rollouts 10
 
-    # Full training (201 Django instances)
-    python examples/harbor/harbor_grpo_local.py --num-rollouts 201
+    # Daytona cloud (no local Docker needed)
+    export DAYTONA_API_KEY="your_key"
+    export DAYTONA_API_URL="https://app.daytona.io/api"
+    python examples/harbor/harbor_grpo_local.py \
+        --env daytona \
+        --model Qwen/Qwen2.5-Coder-7B-Instruct \
+        --num-rollouts 10
 
-    # With custom agent
-    python examples/harbor/harbor_grpo_local.py --agent qwen-coder --num-rollouts 50
+    # Custom instance list
+    python examples/harbor/harbor_grpo_local.py \
+        --instances train_instances_id.txt \
+        --model your-model \
+        --agent mini-swe-agent
+
+Harbor Agents (all work with both docker and daytona):
+    qwen-coder, mini-swe-agent, claude-code, openhands, aider, swe-agent, oracle, ...
 """
 
 import argparse
@@ -245,34 +241,55 @@ def run_local_grpo_training(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Harbor GRPO Trainer - Local GPU")
+    parser = argparse.ArgumentParser(
+        description="Harbor GRPO Trainer - Train any model with any agent",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    # Core arguments
+    parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct",
+                       help="HuggingFace model name (default: Qwen/Qwen2.5-Coder-7B-Instruct)")
+    parser.add_argument("--agent", default="qwen-coder",
+                       help="Harbor agent: qwen-coder, mini-swe-agent, claude-code, openhands, oracle (default: qwen-coder)")
+    parser.add_argument("--env", default="docker",
+                       help="Environment: docker (local) or daytona (cloud) (default: docker)")
+    parser.add_argument("--dataset", default="swebench-verified@1.0",
+                       help="Harbor dataset (default: swebench-verified@1.0)")
+    parser.add_argument("--agent-import-path", default=None,
+                       help="Custom agent import path (e.g., my_agents.custom:MyAgent)")
+
+    # Training arguments
     parser.add_argument("--num-rollouts", type=int, default=50,
-                       help="Number of SWE-bench instances to train on")
+                       help="Number of instances to train on (default: 50)")
+    parser.add_argument("--instances", type=str, default=None,
+                       help="Path to file with instance IDs (one per line)")
     parser.add_argument("--n-samples", type=int, default=4,
-                       help="Number of samples per instance (GRPO group size)")
-    parser.add_argument("--agent", default="mini-swe-agent-plus",
-                       help="Harbor agent (mini-swe-agent-plus, qwen-coder, etc.)")
-    parser.add_argument("--model", default="Kwai-Klear/Klear-AgentForge-8B-SFT",
-                       help="Model name")
+                       help="GRPO group size (default: 4)")
     parser.add_argument("--lr", type=float, default=1e-6,
-                       help="Learning rate")
+                       help="Learning rate (default: 1e-6)")
     parser.add_argument("--kl-coef", type=float, default=0.001,
-                       help="KL coefficient")
-    parser.add_argument("--output-dir", default="outputs/harbor_grpo_local",
-                       help="Output directory")
+                       help="KL coefficient (default: 0.001)")
+
+    # Output arguments
+    parser.add_argument("--output-dir", default="outputs/harbor_grpo",
+                       help="Output directory (default: outputs/harbor_grpo)")
     parser.add_argument("--jobs-dir", default="jobs",
-                       help="Harbor jobs directory")
+                       help="Harbor jobs directory (default: jobs)")
     parser.add_argument("--save-every", type=int, default=10,
-                       help="Save checkpoint every N instances")
+                       help="Save checkpoint every N instances (default: 10)")
+
+    # Flags
     parser.add_argument("--test", action="store_true",
                        help="Test mode (5 instances)")
     parser.add_argument("--no-lora", action="store_true",
-                       help="Disable LoRA (use full fine-tuning)")
+                       help="Disable LoRA (full fine-tuning)")
     args = parser.parse_args()
 
     config = HarborGRPOConfig(
         model_name=args.model,
         agent=args.agent,
+        agent_import_path=getattr(args, 'agent_import_path', None),
+        env=args.env,
+        dataset=args.dataset,
         n_samples_per_prompt=args.n_samples,
         lr=args.lr,
         kl_coef=args.kl_coef,

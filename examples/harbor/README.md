@@ -1,266 +1,160 @@
 # Harbor GRPO Training
 
-Train coding agents using **Harbor** for rollouts and **SLiME GRPO** for RL training.
+Train coding agents using **Harbor** for rollouts and **GRPO** for RL training.
 
-## Architecture
+## Prerequisites
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  Harbor Agent   │───▶│  Trajectories    │───▶│  GRPO Training  │
-│ (mini-swe-agent)│    │  (text + reward) │    │  (GPU)          │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-       │                        │
-       ▼                        ▼
-  Local Docker            swebench.harness
-  (agent execution)       (evaluation)
-```
-
-**Key**: Log probs are recomputed at training time, not captured from Harbor.
-
----
-
-## Prerequisites (All Users)
-
-### Step 1: Clone SLiME Repository
+Before running Harbor GRPO training, ensure SLiME is set up:
 
 ```bash
-git clone https://github.com/GaokaiZhang/slime.git
-cd slime
-git submodule update --init --recursive
-```
-
-### Step 2: Create Conda Environment
-
-```bash
-conda create -n slime python=3.11 -y
-conda activate slime
-```
-
-### Step 3: Install SLiME and Dependencies
-
-```bash
-# Install SLiME (required for ppo_utils)
+cd /path/to/slime
 pip install -e .
+```
 
-# Install training dependencies
-pip install torch transformers peft accelerate datasets huggingface_hub
+## Quick Start
+
+```bash
+# Install dependencies
+pip install torch transformers peft accelerate
 
 # Install Harbor CLI
-curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install harbor
 
-# Verify installations
-python -c "from slime.utils.ppo_utils import compute_policy_loss; print('SLiME OK')"
-harbor --help
-```
-
-### Step 4: Setup Docker with SWE-bench Images
-
-```bash
-# Verify Docker is running
-docker ps
-
-# Pull SWE-bench images (example for Django)
-docker pull ghcr.io/swe-bench/django__django:latest
-
-# Or pull all images (takes time and disk space)
-# See: https://github.com/princeton-nlp/SWE-bench
-```
-
----
-
-## Option 1: Local GPU Training
-
-**Additional Requirements:**
-- Local GPU (24GB+ VRAM recommended)
-
-### Run Training
-
-```bash
-cd slime
-
-# Test mode (5 instances, quick validation)
-python examples/harbor/harbor_grpo_local.py --test
-
-# Full training (201 Django instances)
+# Run training
 python examples/harbor/harbor_grpo_local.py \
-    --num-rollouts 201 \
-    --n-samples 4 \
-    --output-dir outputs/harbor_grpo_local
+    --model Qwen/Qwen2.5-Coder-7B-Instruct \
+    --agent qwen-coder \
+    --num-rollouts 10
 ```
 
-### CLI Options
+## Environments
+
+Choose where agent rollouts execute:
+
+| Environment | Flag | Requirements |
+|-------------|------|--------------|
+| **Local Docker** | `--env docker` (default) | Docker + SWE-bench images |
+| **Daytona Cloud** | `--env daytona` | Daytona API key (no Docker needed) |
 
 ```bash
-python examples/harbor/harbor_grpo_local.py --help
+# Local Docker (default)
+python examples/harbor/harbor_grpo_local.py --env docker ...
 
-Options:
-  --num-rollouts    Number of SWE-bench instances (default: 50)
-  --n-samples       GRPO group size (default: 4)
-  --agent           Harbor agent: mini-swe-agent-plus, qwen-coder (default: mini-swe-agent-plus)
-  --model           Model name (default: Kwai-Klear/Klear-AgentForge-8B-SFT)
-  --lr              Learning rate (default: 1e-6)
-  --kl-coef         KL coefficient (default: 0.001)
-  --output-dir      Output directory (default: outputs/harbor_grpo_local)
-  --test            Test mode with 5 instances
-  --no-lora         Disable LoRA (use full fine-tuning)
+# Daytona Cloud
+export DAYTONA_API_KEY="your_key"
+export DAYTONA_API_URL="https://app.daytona.io/api"
+python examples/harbor/harbor_grpo_local.py --env daytona ...
 ```
 
----
+## Harbor Agents
 
-## Option 2: Modal GPU Training
+All Harbor built-in agents work with both docker and daytona environments:
 
-**Additional Requirements:**
-- Modal account
+| Agent | Flag | Description |
+|-------|------|-------------|
+| `qwen-coder` | `--agent qwen-coder` | Qwen Code agent (default) |
+| `mini-swe-agent` | `--agent mini-swe-agent` | Mini SWE Agent |
+| `claude-code` | `--agent claude-code` | Claude Code CLI |
+| `openhands` | `--agent openhands` | OpenHands |
+| `aider` | `--agent aider` | Aider |
+| `swe-agent` | `--agent swe-agent` | SWE-Agent |
+| `oracle` | `--agent oracle` | Oracle (applies gold solution) |
 
-### Setup Modal (One-time)
+See all agents: [Harbor docs](https://github.com/laude-institute/harbor)
+
+### About mini-swe-agent
+
+Harbor's `mini-swe-agent` uses the [mini-swe-agent-plus](https://github.com/mini-swe-agent-plus) tool internally. To use it:
 
 ```bash
-# Install Modal CLI
-pip install modal
+# Install mini-swe-agent-plus (required for --agent mini-swe-agent)
+pip install minisweagent
+# Or install from slime submodule:
+pip install -e submodules/mini-swe-agent-plus
 
-# Authenticate
-modal setup
-
-# Create HF token secret
-modal secret create hf-token-swe HF_TOKEN=your_huggingface_token
-
-# Verify
-modal profile list
+# Then use with Harbor
+python examples/harbor/harbor_grpo_local.py \
+    --agent mini-swe-agent \
+    --model openai/gpt-4o \
+    --num-rollouts 10
 ```
 
-### Run Training
+## Examples
 
 ```bash
-cd slime
+# Any model + any agent + local Docker
+python examples/harbor/harbor_grpo_local.py \
+    --model Qwen/Qwen2.5-Coder-7B-Instruct \
+    --agent qwen-coder \
+    --env docker \
+    --num-rollouts 50
 
-# Test mode (5 instances)
-modal run examples/harbor/harbor_grpo_modal.py --test
+# Daytona cloud (HPC clusters without Docker)
+python examples/harbor/harbor_grpo_local.py \
+    --model Qwen/Qwen2.5-Coder-7B-Instruct \
+    --agent mini-swe-agent \
+    --env daytona \
+    --num-rollouts 50
 
-# Full training (201 Django instances)
-modal run examples/harbor/harbor_grpo_modal.py \
-    --num-rollouts 201 \
-    --n-samples 4 \
-    --output-dir outputs/harbor_grpo_modal
+# Custom instance list
+python examples/harbor/harbor_grpo_local.py \
+    --instances train_instances_id.txt \
+    --model your-model-name \
+    --agent openhands
 ```
 
-### CLI Options
+## CLI Arguments
 
-```bash
-modal run examples/harbor/harbor_grpo_modal.py --help
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--model` | Qwen/Qwen2.5-Coder-7B-Instruct | HuggingFace model name |
+| `--agent` | qwen-coder | Harbor agent (see table above) |
+| `--agent-import-path` | None | Custom agent import path |
+| `--env` | docker | Environment: `docker` or `daytona` |
+| `--dataset` | swebench-verified@1.0 | Harbor dataset |
+| `--num-rollouts` | 50 | Number of instances |
+| `--instances` | None | Path to instance ID file |
+| `--n-samples` | 4 | GRPO group size |
+| `--lr` | 1e-6 | Learning rate |
+| `--kl-coef` | 0.001 | KL coefficient |
+| `--output-dir` | outputs/harbor_grpo | Output directory |
+| `--test` | - | Test mode (5 instances) |
+| `--no-lora` | - | Disable LoRA |
 
-Options:
-  --num-rollouts    Number of SWE-bench instances (default: 50)
-  --n-samples       GRPO group size (default: 4)
-  --agent           Harbor agent (default: mini-swe-agent-plus)
-  --model-name      Model name (default: Kwai-Klear/Klear-AgentForge-8B-SFT)
-  --lr              Learning rate (default: 1e-6)
-  --kl-coef         KL coefficient (default: 0.001)
-  --output-dir      Output directory (default: outputs/harbor_grpo_modal)
-  --test            Test mode with 5 instances
-```
+## Training Data
 
----
+Django training instances (201): `train_instances_id.txt` in repo root.
 
-## GRPO Parameters (Search-R1)
+## GRPO Hyperparameters (Search-R1)
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `lr` | 1e-6 | Learning rate |
-| `kl_coef` | 0.001 | KL divergence coefficient |
-| `kl_loss_type` | low_var_kl | Low-variance KL approximation |
-| `eps_clip` | 0.2 | PPO clip lower bound |
-| `eps_clip_high` | 0.28 | PPO clip upper bound (DAPO) |
-| `n_samples` | 4 | Group size for GRPO |
-
----
+| Parameter | Value |
+|-----------|-------|
+| Learning rate | 1e-6 |
+| KL coefficient | 0.001 |
+| KL loss type | low_var_kl |
+| PPO clip | 0.2 |
+| PPO clip high | 0.28 |
+| Group size | 4 |
 
 ## File Structure
 
 ```
 examples/harbor/
-├── harbor_core.py          # ★ Shared: Config, rollouts, GRPO training
-├── harbor_grpo_local.py    # Local GPU trainer
-├── harbor_grpo_modal.py    # Modal GPU trainer
-├── harbor_rollout.py       # Harbor CLI wrapper
-├── trajectory_converter.py # Harbor output → SLiME format
-└── test_harbor_slime.py    # Integration tests
+├── harbor_grpo_local.py   # Main trainer (local GPU)
+├── harbor_grpo_modal.py   # Modal GPU trainer
+├── harbor_core.py         # Shared GRPO implementation
+└── __init__.py
 ```
 
----
+## Modal GPU Training
 
-## Troubleshooting
-
-### Harbor agent fails
+For users without local GPU.
 
 ```bash
-# Check Harbor is installed
-harbor --help
-
-# Check Docker is running
-docker ps
-
-# Test Harbor manually
-harbor run --agent oracle --dataset hello-world@1.0 --n-concurrent 1
-```
-
-### Modal authentication error
-
-```bash
-# Re-authenticate
+pip install modal
 modal setup
 
-# Check secret exists
-modal secret list | grep hf-token
+modal run examples/harbor/harbor_grpo_modal.py \
+    --model Qwen/Qwen2.5-Coder-7B-Instruct \
+    --num-rollouts 50
 ```
-
-### CUDA out of memory
-
-```bash
-# Use LoRA (enabled by default)
-python examples/harbor/harbor_grpo_local.py --test
-
-# Or reduce batch size by using fewer samples
-python examples/harbor/harbor_grpo_local.py --n-samples 2
-```
-
-### swebench.harness evaluation fails
-
-```bash
-# Check Docker images
-docker images | grep swe-bench
-
-# Pull missing image
-docker pull ghcr.io/swe-bench/django__django:latest
-```
-
----
-
-## Output
-
-Training outputs are saved to `--output-dir`:
-
-```
-outputs/harbor_grpo_local/
-├── metrics.json          # Per-instance training metrics
-├── summary.json          # Training summary
-├── checkpoint_10/        # Intermediate checkpoint
-├── checkpoint_20/
-└── final/                # Final trained model
-```
-
----
-
-## Comparison: Local vs Modal
-
-| Feature | Local GPU | Modal GPU |
-|---------|-----------|-----------|
-| GPU | Your machine | Modal A100-80GB |
-| Rollouts | Local (Harbor + Docker) | Local (Harbor + Docker) |
-| Training | Local GPU | Modal GPU |
-| Cost | Your electricity | Modal credits |
-| Setup | Simpler | Requires Modal account |
-
-**Recommendation:**
-- Use **Local GPU** if you have 24GB+ VRAM
-- Use **Modal GPU** if you need A100 or don't have local GPU

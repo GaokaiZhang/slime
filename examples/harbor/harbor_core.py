@@ -37,8 +37,11 @@ class HarborGRPOConfig:
     # Model
     model_name: str = "Kwai-Klear/Klear-AgentForge-8B-SFT"
 
-    # Harbor agent
-    agent: str = "mini-swe-agent-plus"  # Use mini-swe-agent-plus for production
+    # Harbor agent and environment
+    agent: str = "qwen-coder"  # Built-in: qwen-coder, mini-swe-agent, claude-code, openhands, etc.
+    agent_import_path: str = None  # Custom agent import path (e.g., for mini-swe-agent-plus)
+    env: str = "docker"  # Environment: "docker" (local) or "daytona" (cloud)
+    dataset: str = "swebench-verified@1.0"  # Dataset to use
     n_concurrent: int = 1
 
     # GRPO training (Search-R1 parameters)
@@ -93,14 +96,19 @@ def run_harbor_agent(
     # Build Harbor command
     cmd = [
         "harbor", "run",
+        "--env", config.env,
         "--agent", config.agent,
-        "--dataset", "swebench-verified@1.0",
+        "--dataset", config.dataset,
         "--task-name", instance_id,
         "--n-concurrent", str(config.n_concurrent),
         "--jobs-dir", config.jobs_dir,
         "--job-name", job_name,
         "--export-traces",
     ]
+
+    # Add custom agent import path if specified
+    if config.agent_import_path:
+        cmd.extend(["--agent-import-path", config.agent_import_path])
 
     logger.info(f"  Running Harbor: {config.agent} on {instance_id}")
 
