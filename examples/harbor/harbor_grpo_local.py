@@ -247,9 +247,11 @@ def main():
     )
     # Core arguments
     parser.add_argument("--model", default="Qwen/Qwen2.5-Coder-7B-Instruct",
-                       help="HuggingFace model name (default: Qwen/Qwen2.5-Coder-7B-Instruct)")
+                       help="HuggingFace model for GRPO training (default: Qwen/Qwen2.5-Coder-7B-Instruct)")
     parser.add_argument("--agent", default="qwen-coder",
                        help="Harbor agent: qwen-coder, mini-swe-agent, claude-code, openhands, oracle (default: qwen-coder)")
+    parser.add_argument("--agent-model", default=None,
+                       help="Model for agent (e.g., openai/gpt-4o, openai/local-model). Defaults to training model.")
     parser.add_argument("--env", default="docker",
                        help="Environment: docker (local) or daytona (cloud) (default: docker)")
     parser.add_argument("--dataset", default="swebench-verified@1.0",
@@ -287,6 +289,7 @@ def main():
     config = HarborGRPOConfig(
         model_name=args.model,
         agent=args.agent,
+        agent_model=args.agent_model,  # Model for agent inference (e.g., openai/local-model)
         agent_import_path=getattr(args, 'agent_import_path', None),
         env=args.env,
         dataset=args.dataset,

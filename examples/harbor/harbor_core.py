@@ -39,6 +39,7 @@ class HarborGRPOConfig:
 
     # Harbor agent and environment
     agent: str = "qwen-coder"  # Built-in: qwen-coder, mini-swe-agent, claude-code, openhands, etc.
+    agent_model: str = None  # Model for agent (e.g., openai/gpt-4o, openai/local-model). Defaults to training model.
     agent_import_path: str = None  # Custom agent import path (e.g., for mini-swe-agent-plus)
     env: str = "docker"  # Environment: "docker" (local) or "daytona" (cloud)
     dataset: str = "swebench-verified@1.0"  # Dataset to use
@@ -105,6 +106,10 @@ def run_harbor_agent(
         "--job-name", job_name,
         "--export-traces",
     ]
+
+    # Add model for agent if specified (e.g., openai/gpt-4o or openai/local-model)
+    if config.agent_model:
+        cmd.extend(["--model", config.agent_model])
 
     # Add custom agent import path if specified
     if config.agent_import_path:
