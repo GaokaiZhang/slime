@@ -1842,3 +1842,471 @@ python examples/harbor/harbor_grpo_local.py \
     --num-rollouts 50 \
     --n-samples 4
 ```
+
+---
+
+## C2Bug Data Integration (2026-01-24)
+
+### New: c2bug Data Support for Harbor GRPO Training
+
+Integrated C2Bug data from HuggingFace (`TwelfthStar/c2bug_tasks_django_Jan-22-2026`) for Harbor GRPO training.
+
+### Files Added
+
+```
+examples/harbor/
+├── c2bug_adapter.py      # Data loading and conversion
+├── c2bug_template/       # Harbor task templates
+│   ├── Dockerfile
+│   ├── instruction.md
+│   ├── task.toml
+│   └── test.sh
+└── harbor_grpo_c2bug.py  # Training script for c2bug data
+```
+
+### Key Features
+
+1. **Preserves Original SWE-bench Loading**: The original `harbor_core.py` data loading is unchanged.
+
+2. **C2Bug Data Format**:
+   - `task_uid`: Unique task identifier
+   - `instance_id`: Instance ID
+   - `repo`: Repository (e.g., `django/django`)
+   - `commit`: Git commit hash
+   - `issue_text`: Problem description
+   - `bug_patch`: Patch introducing the bug
+   - `failed_test_command`: Test command to run
+
+3. **Harbor Task Structure**:
+   ```
+   task_dir/
+   ├── instruction.md          # Problem statement
+   ├── task.toml               # Task config
+   ├── environment/
+   │   ├── Dockerfile          # Docker build with bug patch
+   │   └── bug.patch           # Bug to be fixed
+   ├── tests/
+   │   ├── test.sh             # Test runner script
+   │   └── config.json         # Test config with command
+   └── solution/               # Empty (for agent output)
+   ```
+
+### Usage (Consolidated CLI)
+
+**SWE-bench data (default):**
+```bash
+python examples/harbor/harbor_grpo_local.py \
+    --model Qwen/Qwen2.5-Coder-7B-Instruct \
+    --agent qwen-coder \
+    --num-rollouts 10
+```
+
+**C2Bug data with Daytona:**
+```bash
+export DAYTONA_API_KEY="your_api_key"
+export DAYTONA_API_URL="https://app.daytona.io/api"
+
+python examples/harbor/harbor_grpo_local.py \
+    --data-source c2bug \
+    --env daytona \
+    --agent oracle \
+    --num-rollouts 10 \
+    --n-samples 4
+```
+
+**Test mode (skip training, just rollouts):**
+```bash
+python examples/harbor/harbor_grpo_local.py \
+    --data-source c2bug \
+    --env daytona \
+    --test \
+    --skip-training
+```
+
+### Test Results (2026-01-24)
+
+**Modal GPU Training Test:**
+- ✅ Loaded c2bug data from HuggingFace
+- ✅ Converted to Harbor task format
+- ✅ GRPO training step completed on Modal A100
+- ✅ LoRA applied (40M trainable params, 0.53%)
+- ✅ Weights updated with synthetic data
+
+```
+[1/2] Testing with instance: django_django__ea17e7d9__02a5b41db4ff__repro
+  Prompt length: 2152 chars
+  Synthetic responses: 2
+  Synthetic rewards: [-1.0, 1.0]
+  Results from Modal:
+    Loss: 0.1831
+    Policy loss: 0.1831
+    KL loss: 0.0000
+    Mean reward: 0.00
+    Valid samples: 2
+
+[2/2] Testing with instance: django_django__ea17e7d9__02a5b41db4ff__no_repro
+  Loss: 0.2062
+  Valid samples: 2
+
+Modal GPU Training Test Complete!
+```
+
+### Requirements for Full Training
+
+1. **DAYTONA_API_KEY**: Required for Daytona cloud execution
+2. **Docker Image**: `sweb.eval.x86_64.django_s_django-13810:latest` (or compatible)
+3. **Modal Account**: For GPU training
+
+### Data Statistics
+
+- **Dataset**: `TwelfthStar/c2bug_tasks_django_Jan-22-2026`
+- **Records**: 379 tasks
+- **Repository**: django/django
+- **Fields**: task_uid, instance_id, repo, commit, issue_text, bug_patch, failed_test_command
+
+---
+
+## C2Bug Local GPU Trainer (2026-01-24)
+
+### New: Local GPU Training without Modal
+
+Created `harbor_grpo_c2bug_local.py` for local GPU GRPO training with C2Bug data.
+
+### Key Features
+
+1. **No Modal Required**: Train directly on local GPU (H100, A100, etc.)
+2. **Daytona Integration**: Uses Daytona cloud sandboxes for execution
+3. **Backward Compatible**: Original SWE-bench loading in `harbor_core.py` unchanged
+4. **Separate Codebase**: C2Bug adapter is independent from SWE-bench code
+
+### Files Structure (Consolidated 2026-01-24)
+
+```
+examples/harbor/
+├── harbor_core.py            # SWE-bench data loading
+├── harbor_grpo_local.py      # Unified trainer (supports --data-source swebench/c2bug)
+├── harbor_grpo_modal.py      # Modal GPU trainer
+├── c2bug_adapter.py          # C2Bug data loading
+├── c2bug_template/           # Harbor task templates for c2bug
+│   ├── Dockerfile
+│   ├── instruction.md
+│   ├── task.toml
+│   └── test.sh
+└── simple_openai_server.py   # Local model server for qwen-coder
+```
+
+**Removed**: `harbor_grpo_c2bug.py`, `harbor_grpo_c2bug_local.py` (consolidated into `harbor_grpo_local.py`)
+
+### Usage
+
+**Step 1: Set Daytona API Key**
+```bash
+export DAYTONA_API_KEY="your_api_key"
+# Get from https://app.daytona.io
+```
+
+**Step 2: Run Training**
+```bash
+# Test mode (2 groups, 2 samples)
+python examples/harbor/harbor_grpo_c2bug_local.py \
+    --test \
+    --model Qwen/Qwen2.5-Coder-14B-Instruct \
+    --agent qwen-coder \
+    --env daytona \
+    --daytona-target dtn_eaebb99cfcc922574c48decc8d2a90882d5364bf0bac9781edc2cd178a79420a
+
+# Full training
+python examples/harbor/harbor_grpo_c2bug_local.py \
+    --num-groups 10 \
+    --group-size 4 \
+    --model Qwen/Qwen2.5-Coder-14B-Instruct
+```
+
+### Test Results (2026-01-24)
+
+**C2Bug Data Loading: SUCCESS**
+```
+=== Test: Load c2bug data ===
+  Loaded collection with 379 records
+  run_meta keys: ['repo', 'docker_image', 'workdir', 'test_command_source', 'swebench_version', 'commits']
+
+=== Test: Check first record ===
+  task_uid: django_django__ea17e7d9__02a5b41db4ff__repro
+  issue_text length: 1763 chars
+  bug_patch length: 2825 chars
+  failed_test_command: ./tests/runtests.py --verbosity 2 --settings=test_sqlite --parallel 1 version.te...
+```
+
+**Harbor Task Conversion: SUCCESS**
+```
+=== Converting to Harbor format (3 tasks) ===
+[1] OK   django_django__ea17e7d9__02a5b41db4ff__repro -> /tmp/c2bug_test_tasks/django_django__ea17e7d9__02a5b41db4ff__repro
+[2] OK   django_django__ea17e7d9__02a5b41db4ff__no_repro -> /tmp/c2bug_test_tasks/django_django__ea17e7d9__02a5b41db4ff__no_repro
+[3] OK   django_django__ea17e7d9__037a624120b6__repro -> /tmp/c2bug_test_tasks/django_django__ea17e7d9__037a624120b6__repro
+  Success: 3, Failures: 0
+```
+
+**Training Loop (Synthetic): SUCCESS**
+```
+=== Testing synthetic training loop ===
+  Mean reward: 0.000
+  Std reward: 1.000
+  Advantages: ['-1.000', '1.000']
+```
+
+### Requirements for Full Training
+
+1. **DAYTONA_API_KEY**: Set environment variable
+2. **Daytona Target**: `dtn_eaebb99cfcc922574c48decc8d2a90882d5364bf0bac9781edc2cd178a79420a`
+3. **GPU**: H100/A100 (80GB for 14B model)
+4. **Docker Image**: `swebench/sweb.eval.x86_64.django_1776_django-13810:latest`
+
+### Test Results with Qwen2.5-Coder-14B-Instruct (2026-01-24)
+
+**Rollouts on Daytona: SUCCESS**
+```
+Device: cuda (NVIDIA H100 80GB HBM3)
+GPU Memory: 85.0 GB
+Model: Qwen/Qwen2.5-Coder-14B-Instruct
+LoRA: trainable params: 68,812,800 (0.4637%)
+
+[1/2] django_django__ea17e7d9__02a5b41db4ff__repro
+  Sample 1/2: Status: completed, Reward: -1.0
+  Sample 2/2: Status: completed, Reward: -1.0
+  Training: Loss: 0.0000 (no variance - all rewards same)
+
+[2/2] django_django__ea17e7d9__02a5b41db4ff__no_repro
+  Sample 1/2: Status: completed, Reward: -1.0
+  Sample 2/2: Status: completed, Reward: -1.0
+
+Total samples: 4
+Total resolved: 0 (0.0%)
+Time: 0.8 minutes
+```
+
+**Verified Components:**
+| Component | Status | Notes |
+|-----------|--------|-------|
+| C2Bug data loading | ✅ | 379 records from HuggingFace |
+| Harbor task conversion | ✅ | Dockerfile, test.sh, solution.patch |
+| Model loading (14B) | ✅ | 68.8M trainable params with LoRA |
+| Reference model | ✅ | For KL divergence computation |
+| Daytona execution | ✅ | ~12s per rollout |
+| GRPO training loop | ✅ | Loss=0 (no variance when all rewards same) |
+| Checkpoint saving | ✅ | outputs/harbor_grpo_c2bug_14b/final |
+
+**Note:** Loss was 0.0 because all rewards were identical (-1.0), so there was no reward variance and thus no GRPO gradient signal. This is expected behavior - GRPO only updates weights when there's variance in the group rewards.
+
+### Known Issues
+
+1. **Daytona "Region not found"**: Intermittent capacity issues with Daytona. Retry if this occurs.
+2. **qwen-coder empty responses**: The qwen-coder agent needs an OpenAI-compatible model server to generate responses. The local model server cannot be reached from Daytona containers (they run in the cloud).
+
+### Model Server Setup (2026-01-24)
+
+Created `simple_openai_server.py` for serving Qwen model locally:
+
+```bash
+# Start server
+python examples/harbor/simple_openai_server.py \
+    --model Qwen/Qwen2.5-Coder-14B-Instruct \
+    --port 8000
+
+# Usage
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model": "test", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+**Server features:**
+- FastAPI + transformers backend
+- OpenAI-compatible /v1/chat/completions endpoint
+- Works with slime environment (no CUDA library issues)
+- Model loaded on H100 GPU (~27GB for 14B model)
+
+**Limitation:** Local model server cannot be reached from Daytona cloud containers. For qwen-coder with Daytona, need to either:
+1. Use a publicly accessible model server (e.g., hosted API)
+2. Use `--agent oracle` for testing the pipeline
+3. Wait for Daytona capacity to resolve
+
+### Fix Applied: reverse_patch() Function
+
+Fixed the `reverse_patch()` function in `c2bug_adapter.py` to properly reverse git diff patches:
+
+**Issue:** The `---` and `+++` headers were being incorrectly swapped, producing invalid patches.
+
+**Fix:** Keep `---` and `+++` headers in place, only swap the diff body (+/- lines) and @@ line counts.
+
+```python
+# Before (wrong) - produced:
+# +++ a/file
+# --- b/file
+
+# After (correct) - produces:
+# --- a/file
+# +++ b/file
+```
+
+### Daytona Configuration Fix (2026-01-24)
+
+**Root cause of "Region not found" error:**
+The `DAYTONA_TARGET` was incorrectly set to the API key. It should be a region like "us".
+
+**Correct configuration:**
+```bash
+export DAYTONA_API_KEY=dtn_xxxxx...  # Your API key
+export DAYTONA_API_URL=https://app.daytona.io/api
+export DAYTONA_TARGET=us  # Region, NOT the API key!
+```
+
+**Oracle agent also needed `solve.sh`** - added to c2bug_adapter.py to apply solution.patch.
+
+### Full Training Test: SUCCESS (2026-01-24)
+
+```
+======================================================================
+Harbor GRPO Training - Local GPU
+  - Data source: c2bug
+  - Agent: oracle
+  - Environment: daytona
+======================================================================
+Device: cuda (NVIDIA H100 80GB HBM3)
+
+[1/2] django_django__ea17e7d9__02a5b41db4ff__repro
+  Sample 1/3: Status: completed, Reward: 1.0
+  Sample 2/3: Status: completed, Reward: 1.0
+  Sample 3/3: Status: completed, Reward: 1.0
+  Loss: 0.0000 (no variance - all rewards same)
+
+[2/2] django_django__ea17e7d9__02a5b41db4ff__no_repro
+  Sample 1/3: Status: completed, Reward: 1.0
+  Sample 2/3: Status: completed, Reward: 1.0
+  Sample 3/3: Status: completed, Reward: 1.0
+  Loss: 0.0000 (no variance - all rewards same)
+
+Total instances: 2
+Total samples: 6
+Total resolved: 6 (100.0%)
+Time: 1.6 minutes
+Saved final model to outputs/harbor_grpo_c2bug/final
+```
+
+### All Components Verified Working
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| C2Bug data loading | ✅ | 379 records from HuggingFace |
+| Harbor task conversion | ✅ | Dockerfile, test.sh, solution.patch, solve.sh |
+| Daytona configuration | ✅ | `DAYTONA_TARGET=us` (not the API key!) |
+| Oracle agent | ✅ | With solve.sh to apply solution.patch |
+| GRPO training | ✅ | On local H100 |
+| Model checkpoint | ✅ | Saved to outputs/harbor_grpo_c2bug/final |
+
+### Next Steps
+
+1. ✅ Fixed Daytona configuration (`DAYTONA_TARGET=us`)
+2. ✅ Added `solve.sh` for oracle agent
+3. ✅ Consolidated trainers into `harbor_grpo_local.py` and `harbor_grpo_modal.py`
+4. ✅ Full pipeline verified with 100% resolve rate (oracle)
+5. Test with qwen-coder agent (needs external model server reachable from Daytona)
+6. Evaluate trained model vs baseline
+
+---
+
+## Pipeline Test with Qwen2.5-Coder-14B-Instruct (2026-01-24)
+
+### Test Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Model** | Qwen/Qwen2.5-Coder-14B-Instruct |
+| **Groups** | 3 |
+| **Samples/Group** | 3 |
+| **Agent** | oracle |
+| **Environment** | Daytona |
+| **Data Source** | c2bug (TwelfthStar/c2bug_tasks_django_Jan-22-2026) |
+| **GPU** | NVIDIA H100 80GB HBM3 |
+| **LoRA** | 68.8M trainable params (0.46%) |
+
+### Test Results
+
+```
+======================================================================
+Harbor GRPO Training - Local GPU
+  - Data source: c2bug
+  - Agent: oracle
+  - Environment: daytona
+======================================================================
+Device: cuda (NVIDIA H100 80GB HBM3)
+GPU Memory: 85.0 GB
+
+[1/3] django_django__ea17e7d9__02a5b41db4ff__repro
+  Sample 1/3: Status: completed, Reward: 1.0
+  Sample 2/3: Status: completed, Reward: 1.0
+  Sample 3/3: Status: completed, Reward: 1.0
+  Mean reward: 1.000, Std: 0.000
+  Loss: 0.0000 (policy=0.0000, kl=0.0000)
+
+[2/3] django_django__ea17e7d9__02a5b41db4ff__no_repro
+  Sample 1/3: Status: completed, Reward: 1.0
+  Sample 2/3: Status: completed, Reward: 1.0
+  Sample 3/3: Status: completed, Reward: 1.0
+  Mean reward: 1.000, Std: 0.000
+  Loss: 0.0000 (policy=0.0000, kl=0.0000)
+
+[3/3] django_django__ea17e7d9__037a624120b6__repro
+  Sample 1/3: Status: completed, Reward: 1.0
+  Sample 2/3: Status: completed, Reward: 1.0
+  Sample 3/3: Status: completed, Reward: 1.0
+  Mean reward: 1.000, Std: 0.000
+  Loss: 0.0000 (policy=0.0000, kl=0.0000)
+
+======================================================================
+Training Complete!
+======================================================================
+Total instances: 3
+Total samples: 9
+Total resolved: 9 (100.0%)
+Time: 3.9 minutes
+Saved final model to outputs/harbor_grpo_c2bug_test/final
+```
+
+### Analysis
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| C2Bug data loading | ✅ | 379 records from HuggingFace |
+| Harbor task conversion | ✅ | 3 tasks converted successfully |
+| Model loading (14B) | ✅ | ~30 min (HF download), LoRA applied |
+| Reference model | ✅ | ~12 sec (from cache) |
+| Daytona execution | ✅ | ~13 sec per sample |
+| GRPO training | ✅ | Loss=0 (no variance - oracle) |
+| Model checkpoint | ✅ | Saved to outputs/harbor_grpo_c2bug_test/final |
+
+**Note:** Loss was 0.0 because all rewards were identical (oracle agent → 100% success). GRPO only updates weights when there's variance in the group rewards. For real training, use a non-oracle agent (like qwen-coder) that generates varied responses.
+
+### Training Code Verification
+
+Verified `harbor_core.py` correctly uses SLiME's `ppo_utils.py`:
+
+1. **KL Divergence**: `compute_approx_kl()` with `low_var_kl` (Search-R1 style)
+2. **Policy Loss**: `compute_policy_loss()` with asymmetric clipping (eps_clip=0.2, eps_clip_high=0.28)
+3. **Group-Relative Advantages**: Correctly computes `(r - μ) / σ`
+
+### Tunable Parameters
+
+| Parameter | Current | Source | Description |
+|-----------|---------|--------|-------------|
+| lr | 1e-6 | Search-R1 | Learning rate |
+| kl_coef | 0.001 | Search-R1 | KL penalty coefficient |
+| kl_loss_type | low_var_kl | Search-R1 | Non-negative, unbiased KL estimator |
+| eps_clip | 0.2 | PPO | Lower clipping bound |
+| eps_clip_high | 0.28 | DAPO | Upper clipping bound (asymmetric) |
+| n_samples_per_prompt | 3-8 | GRPO | Group size for advantage computation |
+| temperature | 1.0 | Standard | Full randomness for diversity |
+| lora_r | 16 | LoRA | Rank for efficient fine-tuning |
+
+### Sources
+- [Daytona Python SDK](https://www.daytona.io/docs/en/python-sdk/)
+- [Daytona Configuration](https://www.daytona.io/docs/en/configuration/)

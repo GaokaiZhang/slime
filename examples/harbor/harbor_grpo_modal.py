@@ -354,11 +354,22 @@ def train_step_on_modal(
 # Local Entrypoint
 # ==============================================================================
 
+def parse_harbor_reward(job_dir: Path) -> float:
+    """Parse reward from Harbor job directory (reward.txt)."""
+    for reward_file in job_dir.glob("**/reward.txt"):
+        try:
+            reward_text = reward_file.read_text().strip()
+            return 1.0 if reward_text == "1" else -1.0
+        except Exception:
+            pass
+    return -1.0
+
+
 @app.local_entrypoint()
 def main(
     num_rollouts: int = 50,
     n_samples: int = 4,
-    agent: str = "mini-swe-agent-plus",
+    agent: str = "qwen-coder",
     model_name: str = "Kwai-Klear/Klear-AgentForge-8B-SFT",
     lr: float = 1e-6,
     kl_coef: float = 0.001,
@@ -366,12 +377,25 @@ def main(
     jobs_dir: str = "jobs",
     save_every: int = 10,
     test: bool = False,
+    data_source: str = "swebench",
+    c2bug_dataset: str = "TwelfthStar/c2bug_tasks_django_Jan-22-2026",
+    c2bug_docker_image: str = "swebench/sweb.eval.x86_64.django_1776_django-13810:latest",
+    env: str = "docker",
+    daytona_target: str = None,
+    skip_training: bool = False,
+    eval_method: str = "harbor",
 ):
     """
     Run Harbor GRPO training with Modal GPU.
 
-    Rollouts run locally (Harbor + Docker), training runs on Modal A100.
+    Rollouts run locally (Harbor + Docker/Daytona), training runs on Modal A100.
+    Supports both SWE-bench and C2Bug data sources.
+
+    Args:
+        eval_method: "harbor" (default, uses Harbor's built-in verifier) or "swebench" (uses swebench.harness)
     """
+    import subprocess
+
     # Add project root to path
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -385,14 +409,21 @@ def main(
 
     logger.info("=" * 70)
     logger.info("Harbor GRPO Training - Modal GPU")
-    logger.info("  - Harbor: Agent rollouts (local)")
+    logger.info(f"  - Data source: {data_source}")
+    logger.info(f"  - Agent: {agent}")
+    logger.info(f"  - Environment: {env}")
+    logger.info(f"  - Eval method: {eval_method}")
     logger.info("  - Modal A100: GRPO training")
-    logger.info("  - swebench.harness: Evaluation (local)")
     logger.info("=" * 70)
+
+    # Update output dir for c2bug
+    if output_dir == "outputs/harbor_grpo_modal" and data_source == "c2bug":
+        output_dir = "outputs/harbor_grpo_modal_c2bug"
 
     config = HarborGRPOConfig(
         model_name=model_name,
         agent=agent,
+        env=env,
         n_samples_per_prompt=n_samples,
         lr=lr,
         kl_coef=kl_coef,
@@ -413,11 +444,49 @@ def main(
         "max_response_tokens": 4096,
     }
 
-    # Load training instances
-    train_instances = load_training_instances(
-        num_instances=num_rollouts,
-        test_mode=test,
-    )
+    # Load training instances based on data source
+    if data_source == "c2bug":
+        from examples.harbor.c2bug_adapter import (
+            load_c2bug_from_hf,
+            C2BugToHarbor,
+            C2BugLoader,
+        )
+
+        if test:
+            num_rollouts = min(5, num_rollouts)
+
+        logger.info(f"Loading c2bug data from {c2bug_dataset}...")
+        collection = load_c2bug_from_hf(c2bug_dataset)
+        run_meta_override = {"docker_image": c2bug_docker_image, "workdir": "/testbed"}
+
+        task_root = Path("/tmp/c2bug_harbor_tasks")
+        converter = C2BugToHarbor(
+            collection_source=collection,
+            task_root=task_root,
+            max_timeout_sec=3000.0,
+            run_meta_override=run_meta_override,
+        )
+        converter.generate_many(limit=num_rollouts, overwrite=True)
+
+        train_instances = []
+        loader = C2BugLoader(collection)
+        loader.apply_run_meta(run_meta_override)
+        for record in list(loader.iter_records())[:num_rollouts]:
+            task_name = record.task_uid or record.instance_id
+            task_dir = task_root / task_name
+            if task_dir.exists():
+                train_instances.append({
+                    "instance_id": task_name,
+                    "task_dir": str(task_dir),
+                    "problem_statement": record.issue_text,
+                    "repo": record.repo,
+                })
+        logger.info(f"Loaded {len(train_instances)} c2bug instances")
+    else:
+        train_instances = load_training_instances(
+            num_instances=num_rollouts,
+            test_mode=test,
+        )
 
     os.makedirs(config.output_dir, exist_ok=True)
     os.makedirs(config.jobs_dir, exist_ok=True)
@@ -439,35 +508,85 @@ def main(
         for sample_idx in range(config.n_samples_per_prompt):
             logger.info(f"  Sample {sample_idx + 1}/{config.n_samples_per_prompt}")
 
-            # Run Harbor agent
-            result = run_harbor_agent(
-                instance=instance,
-                config=config,
-                timeout=1800,
-            )
+            if data_source == "c2bug":
+                # C2Bug: run Harbor with task_dir, reward from verifier
+                task_dir = instance["task_dir"]
+                job_name = f"c2bug-{instance_id.replace('/', '_').replace('__', '_')[:50]}-{int(time.time())}"
+                cmd = [
+                    "harbor", "run", "-p", task_dir,
+                    "--env", env, "--agent", agent,
+                    "--n-concurrent", "1", "--jobs-dir", jobs_dir,
+                    "--job-name", job_name, "--export-traces",
+                ]
+                # Add Daytona target if using daytona env
+                _daytona_target = daytona_target or os.environ.get("DAYTONA_TARGET")
+                if env == "daytona" and _daytona_target:
+                    cmd.extend(["--ek", f"target={_daytona_target}"])
+                try:
+                    # Pass environment explicitly for DAYTONA_API_KEY
+                    proc_env = os.environ.copy()
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=proc_env)
+                    if proc.returncode != 0:
+                        logger.warning(f"Harbor returned {proc.returncode}: {proc.stderr[:200] if proc.stderr else ''}")
+                    # Parse reward from job directory
+                    job_dir = Path(jobs_dir) / job_name
+                    reward = -1.0
+                    for reward_file in job_dir.glob("**/reward.txt"):
+                        try:
+                            reward = 1.0 if reward_file.read_text().strip() == "1" else -1.0
+                            break
+                        except Exception:
+                            pass
+                    result = {"response": "", "status": "completed" if reward > 0 else "failed"}
+                except Exception as e:
+                    logger.error(f"Harbor error: {e}")
+                    reward = -1.0
+                    result = {"response": "", "status": "error"}
+            else:
+                # SWE-bench: run Harbor with dataset
+                result = run_harbor_agent(instance=instance, config=config, timeout=1800)
 
-            response = result["response"]
-            patch = result["patch"]
+                # Choose evaluation method
+                if eval_method == "swebench":
+                    # Use swebench.harness for evaluation
+                    reward = evaluate_with_swebench(
+                        instance_id=instance_id,
+                        patch=result.get("patch", ""),
+                        timeout=config.eval_timeout,
+                    )
+                else:
+                    # Default: use Harbor's built-in verifier (reward.txt)
+                    job_dir = result.get("job_dir")
+                    if job_dir:
+                        reward = parse_harbor_reward(Path(job_dir))
+                    else:
+                        # Fallback: try to find reward from jobs_dir
+                        reward = -1.0
+                        for job_path in Path(jobs_dir).glob(f"*{instance_id.replace('/', '_')[:30]}*"):
+                            reward = parse_harbor_reward(job_path)
+                            if reward > 0:
+                                break
 
-            # Evaluate locally
-            reward = evaluate_with_swebench(
-                instance_id=instance_id,
-                patch=patch,
-                timeout=config.eval_timeout,
-            )
-
-            responses.append(response)
+            responses.append(result.get("response", ""))
             rewards.append(reward)
-
             total_samples += 1
             if reward > 0:
                 total_resolved += 1
 
             logger.info(f"    Status: {result['status']}, Reward: {reward}")
 
+        # Skip training if requested
+        if skip_training:
+            logger.info(f"  Skipping training (skip_training=True, rewards={rewards})")
+            all_metrics.append({"instance_id": instance_id, "rewards": rewards, "skipped": True})
+            continue
+
         # Train on Modal
         logger.info("  Training on Modal A100...")
-        prompt = create_swebench_prompt(instance)
+        if data_source == "c2bug":
+            prompt = f"Fix this bug in {instance.get('repo', 'the codebase')}:\n\n{instance.get('problem_statement', '')[:4000]}"
+        else:
+            prompt = create_swebench_prompt(instance)
 
         save_checkpoint = (idx + 1) % config.save_every == 0
         checkpoint_name = f"checkpoint_{idx + 1}" if save_checkpoint else None

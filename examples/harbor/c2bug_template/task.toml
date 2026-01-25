@@ -1,0 +1,18 @@
+[metadata]
+author_name = "unknown"
+author_email = "unknown"
+difficulty = "medium"
+category = "debugging"
+tags = ["debugging", "c2bug"]
+
+[verifier]
+timeout_sec = {max_timeout}
+
+[agent]
+timeout_sec = {max_timeout}
+
+[environment]
+build_timeout_sec = 1800.0
+cpus = 1
+memory = '4G'
+storage = '10G'

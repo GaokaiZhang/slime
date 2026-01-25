@@ -125,26 +125,28 @@ def run_harbor_agent(
             timeout=timeout,
         )
 
+        job_dir = Path(config.jobs_dir) / job_name
+
         if result.returncode != 0:
             logger.warning(f"  Harbor failed: {result.stderr[:200]}")
-            return {"response": "", "patch": "", "status": "failed"}
+            return {"response": "", "patch": "", "status": "failed", "job_dir": str(job_dir)}
 
         # Parse trajectory from job directory
-        job_dir = Path(config.jobs_dir) / job_name
         response, patch = parse_harbor_trajectory(job_dir)
 
         return {
             "response": response,
             "patch": patch,
             "status": "completed" if patch else "no_patch",
+            "job_dir": str(job_dir),
         }
 
     except subprocess.TimeoutExpired:
         logger.warning(f"  Harbor timeout for {instance_id}")
-        return {"response": "", "patch": "", "status": "timeout"}
+        return {"response": "", "patch": "", "status": "timeout", "job_dir": ""}
     except Exception as e:
         logger.error(f"  Harbor error: {e}")
-        return {"response": "", "patch": "", "status": "error"}
+        return {"response": "", "patch": "", "status": "error", "job_dir": ""}
 
 
 def parse_harbor_trajectory(job_dir: Path) -> tuple[str, str]:
