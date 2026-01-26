@@ -1,6 +1,145 @@
 # SSR on SLiME: Status
 
-## Current State: vLLM Agent for GRPO (2026-01-15, Updated)
+## Current State: Tinker GPU Integration (2026-01-26)
+
+### New: harbor_grpo_tinker.py - Tinker GPU for GRPO Training
+
+**File:** `examples/harbor/harbor_grpo_tinker.py`
+
+Added support for [Tinker](https://thinkingmachines.ai/tinker/) (Thinking Machines Lab) as a GPU backend for GRPO training.
+
+**Architecture:**
+```
+Tinker Cloud (GPU)
+├── OpenAI-compatible API for inference
+│   └── Base URL: https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1
+├── Native SDK for training (pip install tinker)
+│   └── LoRA fine-tuning with forward_backward + optim_step
+└── Supported models: Qwen3-8B, Llama-3.1-8B-Instruct, etc.
+
+Local Machine
+├── Harbor agent rollouts (qwen-coder)
+├── Docker containers for evaluation
+└── Reward computation (test execution)
+```
+
+**Key Features:**
+- **Native PPO/GRPO Support**: Tinker natively supports PPO loss function with advantages!
+- Uses Tinker's native SDK for LoRA training with PPO loss
+- Computes GRPO advantages (group-relative normalization)
+- Supports both SWE-bench and C2Bug data sources
+- Configurable PPO clipping thresholds
+
+**GRPO Training Flow:**
+1. Generate rollouts via Harbor agents (with logprobs from sampling)
+2. Compute group-relative advantages from rewards
+3. Train using Tinker's native PPO loss: `loss_fn="ppo"`
+
+**End-to-End Test Results (2026-01-26):**
+
+Full pipeline test with Tinker GPU + Docker + Harbor qwen-coder agent:
+
+```
+============================================================
+COMPREHENSIVE GRPO TRAINING TEST
+============================================================
+Configuration:
+  - GPU: Tinker (Qwen/Qwen3-30B-A3B-Instruct-2507)
+  - Environment: Docker (local)
+  - Agent: qwen-coder
+  - Proxy: http://172.17.0.1:8000/v1 (Docker bridge IP)
+
+Results:
+  [1/3] django__django-7530: Reward 1.0, 1.0 (2/2 solved)
+  [2/3] django__django-9296: Reward -1.0, -1.0 (0/2 solved)
+  [3/3] django__django-10097: Reward -1.0, -1.0 (0/2 solved)
+
+  Total: 6 samples, 2 resolved (33.3%)
+  Time: 19.5 minutes
+
+PPO Training with Mixed Rewards:
+  - n_samples: 6
+  - mean_reward: -0.333
+  - std_reward: 0.943
+  - advantages: [1.414, 1.414, -0.707, -0.707, -0.707, -0.707]
+  - status: SUCCESS
+
+============================================================
+FULL PIPELINE VERIFIED ✓
+============================================================
+```
+
+**Key Findings:**
+- Docker containers need `http://172.17.0.1:8000` (Docker bridge IP) to reach host proxy
+- Tinker proxy captures logprobs automatically for each completion
+- PPO training updates model weights on Tinker GPU
+- GRPO advantages correctly computed from mixed rewards
+
+**Technical Details - Gradient Correctness:**
+- ✅ Only model output tokens are trained (not tool responses)
+- ✅ Tool outputs are in PROMPT (input), not response - excluded from loss
+- ✅ Each API call's response tokens stored separately with logprobs
+- ✅ Completion IDs captured via timestamp-based tracking (fix applied 2026-01-26)
+- ✅ Automatic training now triggers when n_samples collected
+
+**Training Data Flow:**
+```
+Harbor Run → Proxy captures response_tokens + logprobs
+          → Stores with completion_id
+          → Timestamp-based ID capture after run
+          → Train with PPO loss on Tinker GPU
+```
+
+**Per-Instance Training Results:**
+```
+[1/2] django__django-7530: reward=1.0, 1.0 → PPO training, advantages=[0,0]
+[2/2] django__django-9296: reward=-1.0, -1.0 → PPO training, advantages=[0,0]
+
+Note: Within-instance training with identical rewards yields 0 advantages
+      (expected GRPO behavior - no gradient when all samples have same reward)
+```
+
+**Usage:**
+```bash
+# Terminal 1: Start Tinker proxy (requires TINKER_API_KEY)
+export TINKER_API_KEY="tml-..."
+python examples/harbor/tinker_proxy.py --model "Qwen/Qwen3-30B-A3B-Instruct-2507"
+
+# Terminal 2: Run GRPO training (no API key needed - proxy handles auth)
+python examples/harbor/harbor_grpo_tinker.py \
+    --tinker-model "Qwen/Qwen3-30B-A3B-Instruct-2507" \
+    --agent qwen-coder \
+    --num-rollouts 50
+
+# Test mode (3 instances)
+python examples/harbor/harbor_grpo_tinker.py --test --num-rollouts 3
+```
+
+**Tinker API Reference:**
+- Docs: https://tinker-docs.thinkingmachines.ai/
+- Console: https://tinker-console.thinkingmachines.ai/
+- Loss functions: https://tinker-docs.thinkingmachines.ai/losses
+
+**Supported Tinker Models:**
+| Model | Type | Notes |
+|-------|------|-------|
+| Qwen/Qwen3-8B | Dense | Default for GRPO |
+| Qwen/Qwen3-30B-A3B | MoE | Larger capacity |
+| meta-llama/Llama-3.1-8B-Instruct | Dense | Alternative base |
+| meta-llama/Llama-3.1-70B | Dense | High capacity |
+
+**Tinker PPO Loss Requirements:**
+- `target_tokens`: Token IDs from sampling
+- `logprobs`: Logprobs recorded during sampling (reference policy)
+- `advantages`: GRPO advantages computed from rewards
+
+**Limitations:**
+- Model must be from Tinker's supported list (not arbitrary HuggingFace models)
+- OpenAI-compatible API requires checkpoint paths (`tinker://...`), not base model names
+
+---
+
+## Previous State: vLLM Agent for GRPO (2026-01-15, Updated)
 
 ### Latest Update: Both Trainers Now Use SLiME's ppo_utils.py
 
@@ -2310,3 +2449,128 @@ Verified `harbor_core.py` correctly uses SLiME's `ppo_utils.py`:
 ### Sources
 - [Daytona Python SDK](https://www.daytona.io/docs/en/python-sdk/)
 - [Daytona Configuration](https://www.daytona.io/docs/en/configuration/)
+
+---
+
+## Tinker GPU Integration Test (2026-01-26)
+
+### Overview
+
+Successfully integrated **Tinker** (Thinking Machines Lab) for GRPO training with **true PPO loss** using logprobs.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Tinker Cloud (GPU)                        │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ Inference: sample_async() with logprobs              │   │
+│  ├──────────────────────────────────────────────────────┤   │
+│  │ Training: forward_backward(loss_fn="ppo")            │   │
+│  │           + optim_step()                             │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                    Local Machine                             │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              Docker Containers (evaluation)           │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Test Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Model** | Qwen/Qwen3-30B-A3B-Instruct-2507 |
+| **Training Mode** | PPO (native sampling with logprobs) |
+| **Instances** | 3 (test mode) |
+| **Samples/Instance** | 4 |
+| **LoRA Rank** | 32 |
+| **Learning Rate** | 1e-6 |
+| **PPO Clipping** | low=0.8, high=1.28 (matching SLiME) |
+
+### Test Results
+
+```
+============================================================
+Harbor GRPO Training - Tinker GPU
+============================================================
+  Tinker model: Qwen/Qwen3-30B-A3B-Instruct-2507
+  Training mode: PPO (native sampling)
+============================================================
+
+[1/3] django__django-7530
+  Sample 1/4: Reward: 1.0
+  Sample 2/4: Reward: 1.0
+  Sample 3/4: Reward: 1.0
+  Sample 4/4: Reward: 1.0
+  Mean reward: 1.000, GRPO advantages: std=0.000
+  PPO loss: 0.0
+
+[2/3] django__django-9296
+  Sample 1/4: Reward: 1.0
+  Sample 2/4: Reward: 1.0
+  Sample 3/4: Reward: 1.0
+  Sample 4/4: Reward: 1.0
+  Mean reward: 1.000, GRPO advantages: std=0.000
+  PPO loss: 0.0
+
+[3/3] django__django-10097
+  Sample 1/4: Reward: -1.0 (failed)
+  Sample 2/4: Reward: -1.0 (failed)
+  (continued - got varied rewards)
+```
+
+### Key Achievements
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Tinker SDK Integration | ✅ | Native sample_async() with logprobs |
+| Tinker PPO Training | ✅ | forward_backward(loss_fn="ppo") |
+| Hyperparameter Matching | ✅ | eps_clip=0.2→0.8, eps_clip_high=0.28→1.28 |
+| SWE-bench Evaluation | ✅ | Docker containers for test execution |
+| Varied Rewards | ✅ | Model fails on harder instances |
+
+### Hyperparameter Mapping (SLiME ↔ Tinker)
+
+| SLiME Parameter | Value | Tinker Equivalent |
+|-----------------|-------|-------------------|
+| `eps_clip` | 0.2 | `clip_low_threshold = 0.8` |
+| `eps_clip_high` | 0.28 | `clip_high_threshold = 1.28` |
+| `lr` | 1e-6 | `learning_rate = 1e-6` |
+| `kl_loss_type` | low_var_kl | (tracked in metrics) |
+
+### Files Created
+
+| File | Description |
+|------|-------------|
+| `harbor_grpo_tinker.py` | Main training script with Tinker integration |
+| `tinker.md` | Documentation for Tinker GRPO usage |
+
+### Usage
+
+```bash
+# Set API key
+export TINKER_API_KEY="tml-..."
+
+# Test mode with native sampling (true PPO)
+python examples/harbor/harbor_grpo_tinker.py \
+    --tinker-model "Qwen/Qwen3-30B-A3B-Instruct-2507" \
+    --native-sampling \
+    --test
+
+# Full training
+python examples/harbor/harbor_grpo_tinker.py \
+    --tinker-model "Qwen/Qwen3-30B-A3B-Instruct-2507" \
+    --native-sampling \
+    --num-rollouts 50
+```
+
+### Notes
+
+1. **PPO Loss = 0**: Expected when all samples have same reward (no GRPO signal)
+2. **Native Sampling Required**: For true PPO with logprobs, use `--native-sampling` flag
+3. **OpenAI API Limitation**: Tinker's OpenAI-compatible API requires checkpoint paths (`tinker://...`), not base model names
+4. **30B Model Performance**: Very high success rate on easy Django issues (~100% on first 2 instances)
