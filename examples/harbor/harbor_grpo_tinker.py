@@ -1028,21 +1028,9 @@ async def run_grpo_with_tinker(
         mean_reward = sum(instance_rewards) / len(instance_rewards)
         logger.info(f"  Mean reward: {mean_reward:.3f} (positive: {sum(1 for r in instance_rewards if r > 0)}/{len(instance_rewards)})")
 
-        # Check if we have reward variance before training
-        unique_rewards = set(completion_rewards)
-        has_variance = len(unique_rewards) > 1
-
-        # Train via proxy when we have enough samples WITH variance
-        # (skip training if all rewards are identical - no gradient signal)
-        min_batch_size = config.n_samples_per_prompt * 2  # Cross-instance batching
-        should_train = (
-            not skip_training and
-            len(completion_ids) >= min_batch_size and
-            has_variance
-        )
-
-        if should_train:
-            logger.info(f"  Training via proxy with {len(completion_ids)} samples (rewards: {unique_rewards})...")
+        # Train via proxy when we have enough samples
+        if not skip_training and len(completion_ids) >= config.n_samples_per_prompt:
+            logger.info(f"  Training via proxy with {len(completion_ids)} samples...")
 
             try:
                 import requests
@@ -1058,7 +1046,7 @@ async def run_grpo_with_tinker(
 
                 if train_response.status_code == 200:
                     train_result = train_response.json()
-                    logger.info(f"  PPO training: mean_reward={train_result.get('mean_reward', 'N/A'):.3f}, advantages={train_result.get('advantages', [])[:4]}...")
+                    logger.info(f"  PPO training: mean_reward={train_result.get('mean_reward', 'N/A'):.3f}")
                     train_result["instance_id"] = instance_id
                     train_result["idx"] = idx
                     all_metrics.append(train_result)
@@ -1082,46 +1070,18 @@ async def run_grpo_with_tinker(
             completion_ids = []
             completion_rewards = []
         else:
-            # Accumulating samples or skip_training is True
-            if not has_variance:
-                logger.info(f"  Accumulating samples (no variance yet, have {len(completion_ids)} samples)")
+            # Not enough samples yet, or skip_training is True
             all_metrics.append({
                 "instance_id": instance_id,
                 "idx": idx,
                 "rewards": instance_rewards,
                 "mean_reward": mean_reward,
-                "buffered_samples": len(completion_ids),
-                "skipped": skip_training or not has_variance,
+                "skipped": skip_training,
             })
 
         # Save metrics
         with open(os.path.join(config.output_dir, "metrics.json"), "w") as f:
             json.dump(all_metrics, f, indent=2)
-
-    # Final training with any remaining buffered samples
-    if not skip_training and len(completion_ids) > 0:
-        unique_rewards = set(completion_rewards)
-        if len(unique_rewards) > 1:
-            logger.info(f"\n  Final training with {len(completion_ids)} buffered samples (rewards: {unique_rewards})...")
-            try:
-                import requests
-                train_response = requests.post(
-                    f"{proxy_url.rstrip('/v1')}/v1/train/ppo",
-                    json={
-                        "completion_ids": completion_ids,
-                        "rewards": completion_rewards,
-                        "learning_rate": config.lr,
-                    },
-                    timeout=120,
-                )
-                if train_response.status_code == 200:
-                    train_result = train_response.json()
-                    logger.info(f"  Final PPO training: mean_reward={train_result.get('mean_reward', 'N/A'):.3f}, advantages={train_result.get('advantages', [])[:4]}...")
-                    all_metrics.append({"final_training": train_result})
-            except Exception as e:
-                logger.error(f"  Final training error: {e}")
-        else:
-            logger.info(f"\n  Skipped final training: {len(completion_ids)} samples but no variance (rewards: {unique_rewards})")
 
     # Final summary
     elapsed = time.time() - start_time
