@@ -65,6 +65,10 @@ class HarborGRPOConfig:
     # Evaluation
     eval_timeout: int = 300
 
+    # OpenAI API (for agents like qwen-coder)
+    openai_base_url: str = None
+    openai_api_key: str = "local"
+
     # Output
     output_dir: str = "outputs/harbor_grpo"
     jobs_dir: str = "jobs"
@@ -115,6 +119,17 @@ def run_harbor_agent(
     if config.agent_import_path:
         cmd.extend(["--agent-import-path", config.agent_import_path])
 
+    # Add OpenAI API configuration for agents that need it (e.g., qwen-coder)
+    if config.openai_base_url:
+        cmd.extend(["--ak", f"base_url={config.openai_base_url}"])
+    if config.openai_api_key:
+        cmd.extend(["--ak", f"api_key={config.openai_api_key}"])
+
+    # For qwen-coder, pass the model name via --model (not --ak model=...)
+    # The agent expects model_name parameter which is set by --model CLI arg
+    if config.agent == "qwen-coder" and config.model_name and not config.agent_model:
+        cmd.extend(["--model", config.model_name])
+
     logger.info(f"  Running Harbor: {config.agent} on {instance_id}")
 
     try:
@@ -131,13 +146,16 @@ def run_harbor_agent(
             logger.warning(f"  Harbor failed: {result.stderr[:200]}")
             return {"response": "", "patch": "", "status": "failed", "job_dir": str(job_dir)}
 
-        # Parse trajectory from job directory
+        # Parse trajectory from job directory (if available)
+        # Note: Some agents like qwen-coder modify code directly without trajectory files
         response, patch = parse_harbor_trajectory(job_dir)
 
+        # Harbor succeeded - trust its evaluation (reward.txt)
+        # Status is "completed" even if we can't parse trajectory files
         return {
             "response": response,
             "patch": patch,
-            "status": "completed" if patch else "no_patch",
+            "status": "completed",
             "job_dir": str(job_dir),
         }
 
@@ -326,7 +344,7 @@ def load_training_instances(
         num_instances = min(5, num_instances)
 
     # Try to load from file first
-    train_file = Path("/home/gaokaizhang/slime/train_instances_id.txt")
+    train_file = Path("/home/ubuntu/slime/train_instances_id.txt")
     if train_file.exists():
         with open(train_file) as f:
             instance_ids = [line.strip() for line in f if line.strip()]

@@ -35,6 +35,11 @@ Architecture:
     │  └──────────────────────────────────────────────────────┘   │
     └─────────────────────────────────────────────────────────────┘
 
+Setup Requirements:
+    1. Install Harbor: uv tool install harbor
+    2. Fix Harbor's qwen-coder agent (see README.md for instructions)
+    3. Ensure Docker access for local agent rollouts
+
 Usage:
     # Test mode (5 instances)
     modal run examples/harbor/harbor_grpo_modal.py --test

@@ -2,6 +2,71 @@
 
 Train coding agents with GRPO using Harbor for rollouts. Supports both SWE-bench and C2Bug data sources.
 
+## Prerequisites
+
+### 1. Install Dependencies
+```bash
+# Install SLiME
+git clone https://github.com/your-repo/slime.git
+cd slime
+pip install -e .
+
+# Install Harbor via uv
+pip install uv
+uv tool install harbor
+```
+
+### 2. Fix Harbor's qwen-coder Agent (REQUIRED)
+
+Harbor's qwen-coder agent has a bug that prevents it from interacting with the environment. You must manually patch it:
+
+```bash
+# Locate Harbor's qwen-coder agent
+HARBOR_AGENT_FILE=~/.local/share/uv/tools/harbor/lib/python3.*/site-packages/harbor/agents/installed/qwen_code.py
+
+# Edit the file and find the line (around line 62-64):
+#   f"echo {escaped_instruction} | qwen -y "
+# Replace it with:
+#   f"qwen --approval-mode yolo -p {escaped_instruction} "
+```
+
+**The exact change:**
+```python
+# OLD (broken - qwen only generates text, doesn't modify code):
+return [
+    ExecInput(
+        command=(
+            f"echo {escaped_instruction} | qwen -y "
+            f"2>&1 | tee /logs/agent/qwen-code.txt"
+        ),
+        env=env,
+    )
+]
+
+# NEW (fixed - qwen actually modifies files):
+return [
+    ExecInput(
+        command=(
+            f"qwen --approval-mode yolo -p {escaped_instruction} "
+            f"2>&1 | tee /logs/agent/qwen-code.txt"
+        ),
+        env=env,
+    )
+]
+```
+
+**Why this is needed:** The original command uses an invalid `-y` flag and pipes input via `echo`, which prevents qwen from using tools and modifying code. The fixed version uses the correct `--approval-mode yolo` flag and `-p` (prompt) flag, allowing qwen to actually interact with the environment.
+
+### 3. Setup Docker (for SWE-bench)
+```bash
+# Ensure Docker is installed and running
+docker --version
+
+# Add user to docker group (if needed)
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
 ## Quick Start
 
 ```bash
@@ -47,11 +112,29 @@ python examples/harbor/harbor_grpo_local.py \
 
 *Daytona free tier has network restrictions. Use `--env docker` or `--env modal` for LLM-based agents.
 
-### Docker Setup (Recommended)
+### Local Model Server (Optional)
+
+For local GPU inference, start vLLM server:
 ```bash
-# Pull SWE-bench images
-docker pull swebench/sweb.eval.x86_64.django_1776_django-13810:latest
+# Example: Qwen3-Coder-30B-A3B on 4 GPUs
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+python -m vllm.entrypoints.openai.api_server \
+    --model Qwen/Qwen3-Coder-30B-A3B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --tensor-parallel-size 4 \
+    --gpu-memory-utilization 0.95 \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_coder
+
+# Then pass the URL to Harbor
+python examples/harbor/harbor_grpo_local.py \
+    --openai-base-url http://172.17.0.1:8000/v1 \
+    --openai-api-key local \
+    --model Qwen/Qwen3-Coder-30B-A3B-Instruct
 ```
+
+**Note:** Use `172.17.0.1` (Docker bridge IP) instead of `localhost` so agents inside containers can reach the host server.
 
 ### Modal Setup
 ```bash

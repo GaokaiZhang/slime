@@ -127,49 +127,73 @@ def parse_harbor_reward(job_dir: Path) -> float:
 
 def run_harbor_c2bug_agent(
     instance: dict,
-    agent: str,
-    env: str,
+    config: HarborGRPOConfig,
     daytona_target: str = None,
-    jobs_dir: str = "jobs",
     timeout: int = 1800,
-    agent_model: str = None,
-    agent_kwargs: dict = None,
 ) -> dict:
-    """Run Harbor agent on a c2bug instance using task_dir.
+    """
+    Run Harbor agent on a c2bug instance using task_dir.
+
+    Works exactly like run_harbor_agent but uses task_dir (-p) instead of dataset.
+    The only difference is how the bug/test are applied (via task_dir) and evaluation
+    (always uses Harbor's built-in verifier).
 
     Args:
-        agent_kwargs: Additional agent kwargs (e.g., {"base_url": "https://...", "api_key": "..."})
+        instance: C2Bug instance dict with task_dir and instance_id
+        config: Training configuration (same as SWE-bench)
+        daytona_target: Daytona target ID
+        timeout: Timeout in seconds
+
+    Returns:
+        {"response": str, "reward": float, "status": str, "job_dir": str}
     """
     task_dir = instance["task_dir"]
     instance_id = instance["instance_id"]
     job_name = f"c2bug-{instance_id.replace('/', '_').replace('__', '_')[:50]}-{int(time.time())}"
 
+    # Build Harbor command - uses task_dir instead of dataset
     cmd = [
         "harbor", "run",
-        "-p", task_dir,
-        "--env", env,
-        "--agent", agent,
-        "--n-concurrent", "1",
-        "--jobs-dir", jobs_dir,
+        "-p", task_dir,  # Key difference: use task_dir for c2bug
+        "--env", config.env,
+        "--agent", config.agent,
+        "--n-concurrent", str(config.n_concurrent),
+        "--jobs-dir", config.jobs_dir,
         "--job-name", job_name,
         "--export-traces",
     ]
 
-    if env == "daytona" and daytona_target:
-        cmd.extend(["--ek", f"target={daytona_target}"])
-    if agent_model:
-        cmd.extend(["--model", agent_model])
+    # Add model for agent if specified (e.g., openai/gpt-4o)
+    if config.agent_model:
+        cmd.extend(["--model", config.agent_model])
 
-    # Pass additional agent kwargs (e.g., base_url, api_key for qwen-coder)
-    if agent_kwargs:
-        for key, value in agent_kwargs.items():
-            cmd.extend(["--ak", f"{key}={value}"])
+    # Add custom agent import path if specified
+    if config.agent_import_path:
+        cmd.extend(["--agent-import-path", config.agent_import_path])
+
+    # Add Daytona target if using Daytona environment
+    if config.env == "daytona" and daytona_target:
+        cmd.extend(["--ek", f"target={daytona_target}"])
+
+    # Add OpenAI API configuration for agents that need it (e.g., qwen-coder)
+    # SAME AS SWEBENCH - this was the missing piece!
+    if config.openai_base_url:
+        cmd.extend(["--ak", f"base_url={config.openai_base_url}"])
+    if config.openai_api_key:
+        cmd.extend(["--ak", f"api_key={config.openai_api_key}"])
+
+    # For qwen-coder, pass the model name via --model (not --ak model=...)
+    # SAME AS SWEBENCH - this is the critical fix for the 404 error!
+    if config.agent == "qwen-coder" and config.model_name and not config.agent_model:
+        cmd.extend(["--model", config.model_name])
+
+    logger.info(f"  Running Harbor: {config.agent} on {instance_id}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
         # Parse reward from job directory (Harbor's built-in evaluation)
-        job_dir = Path(jobs_dir) / job_name
+        job_dir = Path(config.jobs_dir) / job_name
         reward = parse_harbor_reward(job_dir)
 
         return {"response": "", "reward": reward, "status": "completed" if reward > 0 else "failed", "job_dir": str(job_dir)}
@@ -291,21 +315,12 @@ def run_local_grpo_training(
             logger.info(f"  Sample {sample_idx + 1}/{config.n_samples_per_prompt}")
 
             if data_source == "c2bug":
-                # Build agent_kwargs for agents that need external LLM (e.g., qwen-coder)
-                agent_kwargs = {}
-                if openai_base_url:
-                    agent_kwargs["base_url"] = openai_base_url
-                    agent_kwargs["api_key"] = openai_api_key
-
-                # C2Bug: run Harbor with task_dir
+                # C2Bug: run Harbor with task_dir (same pattern as SWE-bench)
                 result = run_harbor_c2bug_agent(
                     instance=instance,
-                    agent=config.agent,
-                    env=config.env,
+                    config=config,
                     daytona_target=daytona_target,
-                    jobs_dir=config.jobs_dir,
-                    agent_model=config.agent_model,
-                    agent_kwargs=agent_kwargs if agent_kwargs else None,
+                    timeout=1800,
                 )
                 # C2Bug always uses Harbor's built-in verifier (reward.txt)
                 reward = result["reward"]
@@ -516,6 +531,8 @@ def main():
         lr=args.lr,
         kl_coef=args.kl_coef,
         use_lora=not args.no_lora,
+        openai_base_url=args.openai_base_url,
+        openai_api_key=args.openai_api_key,
         output_dir=output_dir,
         jobs_dir=args.jobs_dir,
         save_every=args.save_every,

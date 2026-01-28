@@ -43,10 +43,13 @@ Tinker API Reference:
     - OpenAI endpoint: https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1
     - Supported models: Qwen3-8B, Qwen3-30B-A3B, Llama-3.1-8B-Instruct, etc.
 
-Usage:
-    # Set Tinker API key
-    export TINKER_API_KEY="tml-..."
+Setup Requirements:
+    1. Install Harbor: uv tool install harbor
+    2. Fix Harbor's qwen-coder agent (see README.md for instructions)
+    3. Ensure Docker access for local agent rollouts
+    4. Set Tinker API key: export TINKER_API_KEY="tml-..."
 
+Usage:
     # Test mode (5 instances)
     python examples/harbor/harbor_grpo_tinker.py --test
 
